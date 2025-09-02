@@ -34,7 +34,7 @@ jobs:
       - name: Create binary package
         run: |
           mkdir -p packages
-          cp target/release/detector packages/${{ env.BINARY_NAME }}
+          cp target/release/secret-orb packages/${{ env.BINARY_NAME }}
           tar -czf ${{ env.BINARY_NAME }}-linux-x64.tar.gz -C packages ${{ env.BINARY_NAME }}
       
       - name: Build .deb package
