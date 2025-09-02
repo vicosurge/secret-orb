@@ -1,0 +1,14 @@
+{
+    "rooms": {
+        "1": {
+            "name": "Main Room",
+            "id": 1,
+            "description": "This is the main room"
+        },
+        "2": {
+            "name": "Back Room",
+            "id": 2,
+            "description": "This is a hidden room"
+        }
+    }
+}
