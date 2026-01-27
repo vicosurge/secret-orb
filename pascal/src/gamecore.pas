@@ -6,7 +6,7 @@ unit GameCore;
 interface
 
 uses
-  SysUtils, GameData, DataFile, Display;
+  Crt, SysUtils, GameData, DataFile, Display;
 
 type
   TCommandType = (
