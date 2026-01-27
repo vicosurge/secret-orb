@@ -70,30 +70,45 @@ jobs:
       - name: Download and Install Free Pascal
         shell: pwsh
         run: |
+          # Use direct mirror link to avoid SourceForge redirects
           $fpcZip = "fpc-${{ env.FPC_VERSION }}.i386-win32.zip"
-          $fpcUrl = "https://sourceforge.net/projects/freepascal/files/Win32/${{ env.FPC_VERSION }}/$fpcZip/download"
 
-          Write-Host "Downloading FPC from: $fpcUrl"
-          Invoke-WebRequest -Uri $fpcUrl -OutFile $fpcZip -UseBasicParsing
+          # Try multiple mirrors
+          $mirrors = @(
+            "https://downloads.sourceforge.net/project/freepascal/Win32/${{ env.FPC_VERSION }}/$fpcZip",
+            "https://netcologne.dl.sourceforge.net/project/freepascal/Win32/${{ env.FPC_VERSION }}/$fpcZip",
+            "https://freefr.dl.sourceforge.net/project/freepascal/Win32/${{ env.FPC_VERSION }}/$fpcZip"
+          )
 
-          Write-Host "Extracting to ${{ env.FPC_DIR }}..."
-          Expand-Archive -Path $fpcZip -DestinationPath ${{ env.FPC_DIR }} -Force
+          $downloaded = $false
+          foreach ($url in $mirrors) {
+            Write-Host "Trying: $url"
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $fpcZip -UseBasicParsing -MaximumRedirection 5
+              $fileSize = (Get-Item $fpcZip).Length
+              Write-Host "Downloaded $fileSize bytes"
+              if ($fileSize -gt 1000000) {
+                $downloaded = $true
+                break
+              } else {
+                Write-Host "File too small, trying next mirror..."
+              }
+            } catch {
+              Write-Host "Failed: $_"
+            }
+          }
+
+          if (-not $downloaded) {
+            Write-Host "ERROR: Could not download FPC from any mirror"
+            exit 1
+          }
+
+          Write-Host "Extracting with 7zip to ${{ env.FPC_DIR }}..."
+          New-Item -ItemType Directory -Force -Path ${{ env.FPC_DIR }} | Out-Null
+          7z x $fpcZip -o"${{ env.FPC_DIR }}" -y
 
           Write-Host "Contents of ${{ env.FPC_DIR }}:"
           Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Depth 2 | Select-Object FullName
-
-          # Find the bin directory
-          $binDir = Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Directory -Filter "bin" | Select-Object -First 1
-          if ($binDir) {
-            $fpcBin = Get-ChildItem -Path $binDir.FullName -Recurse -Directory | Where-Object { $_.Name -like "i386-win32" -or $_.Name -like "x86_64-win64" } | Select-Object -First 1
-            if ($fpcBin) {
-              Write-Host "Adding to PATH: $($fpcBin.FullName)"
-              echo $fpcBin.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-            } else {
-              Write-Host "Adding bin directory to PATH: $($binDir.FullName)"
-              echo $binDir.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-            }
-          }
 
       - name: Verify FPC installation
         shell: pwsh
