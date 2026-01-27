@@ -68,33 +68,45 @@ jobs:
         shell: pwsh
         run: |
           choco install freepascal -y --no-progress
-          # Add FPC to PATH for subsequent steps
-          $fpcPath = "C:\FPC\3.2.2\bin\i386-win32"
-          if (Test-Path $fpcPath) {
-            echo "$fpcPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
-          # Also try x86_64 path
-          $fpcPath64 = "C:\FPC\3.2.2\bin\x86_64-win64"
-          if (Test-Path $fpcPath64) {
-            echo "$fpcPath64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          # Chocolatey installs FPC to C:\FPC\<version>\bin\<arch>
+          # Add all possible bin paths
+          $paths = @(
+            "C:\FPC\3.2.2\bin\i386-win32",
+            "C:\FPC\3.2.2\bin\x86_64-win64",
+            "C:\lazarus\fpc\3.2.2\bin\i386-win32",
+            "C:\lazarus\fpc\3.2.2\bin\x86_64-win64"
+          )
+          foreach ($p in $paths) {
+            if (Test-Path $p) {
+              Write-Host "Adding to PATH: $p"
+              echo $p | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            }
           }
 
       - name: Verify FPC installation
         shell: pwsh
         run: |
-          # Find fpc.exe
-          $fpc = Get-ChildItem -Path "C:\FPC" -Recurse -Filter "fpc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($fpc) {
-            Write-Host "Found FPC at: $($fpc.FullName)"
-            $fpcDir = $fpc.DirectoryName
-            echo "$fpcDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "PATH entries:"
+          $env:PATH -split ';' | Where-Object { $_ -like '*fpc*' -or $_ -like '*FPC*' }
+          Write-Host ""
+          Write-Host "Checking fpc command..."
+          $fpcCmd = Get-Command fpc -ErrorAction SilentlyContinue
+          if ($fpcCmd) {
+            Write-Host "FPC found at: $($fpcCmd.Source)"
+            fpc -iV
           } else {
-            Write-Host "FPC not found in C:\FPC, searching Program Files..."
-            $fpc = Get-ChildItem -Path "C:\Program Files" -Recurse -Filter "fpc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($fpc) {
-              Write-Host "Found FPC at: $($fpc.FullName)"
-              $fpcDir = $fpc.DirectoryName
-              echo "$fpcDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            Write-Host "FPC not in PATH, checking known locations..."
+            $locations = @(
+              "C:\FPC\3.2.2\bin\i386-win32\fpc.exe",
+              "C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe"
+            )
+            foreach ($loc in $locations) {
+              if (Test-Path $loc) {
+                Write-Host "Found: $loc"
+                $dir = Split-Path $loc
+                echo $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+                break
+              }
             }
           }
 
@@ -103,9 +115,18 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          fpc -O2 -XX -CX -Xs -Fusrc -obin\secretorb.exe secretorb.pas
+          # Use explicit path if fpc not in PATH
+          $fpcExe = "fpc"
+          if (-not (Get-Command fpc -ErrorAction SilentlyContinue)) {
+            $fpcExe = "C:\FPC\3.2.2\bin\i386-win32\fpc.exe"
+            if (-not (Test-Path $fpcExe)) {
+              $fpcExe = "C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe"
+            }
+          }
+          Write-Host "Using FPC: $fpcExe"
+          & $fpcExe -O2 -XX -CX -Xs -Fusrc -obin\secretorb.exe secretorb.pas
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          fpc -O2 -XX -CX -Xs -Fusrc -obin\editor.exe editor.pas
+          & $fpcExe -O2 -XX -CX -Xs -Fusrc -obin\editor.exe editor.pas
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Windows build
