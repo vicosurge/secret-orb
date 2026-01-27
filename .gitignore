@@ -1,2 +1,12 @@
 Cargo.lock
 target/
+
+# Pascal compiled files
+pascal/bin/
+pascal/dist/
+pascal/*.tar.gz
+pascal/*.zip
+*.o
+*.ppu
+*.exe
+*.EXE

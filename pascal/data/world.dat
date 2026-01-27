@@ -1,0 +1,30 @@
+; Secret Orb World Data
+; Example world converted from rooms.json
+
+[WORLD]
+TITLE=Secret Orb Demo
+START=1
+
+[ROOM:1]
+NAME=Main Room
+DESC=You stand in a grand entrance hall. Stone walls rise high around you, covered in faded tapestries depicting ancient battles. A cold draft blows from the north.
+NORTH=2
+SOUTH=0
+EAST=0
+WEST=0
+
+[ROOM:2]
+NAME=Back Room
+DESC=This hidden chamber lies behind the main hall. Dust covers everything, and cobwebs hang from the ceiling. Strange symbols are carved into the floor.
+NORTH=0
+SOUTH=1
+EAST=0
+WEST=0
+
+[ROOM:3]
+NAME=Shadow Room
+DESC=Darkness envelops you completely. You can barely make out the walls of this forgotten place. Something glimmers faintly in the distance.
+NORTH=0
+SOUTH=0
+EAST=0
+WEST=0

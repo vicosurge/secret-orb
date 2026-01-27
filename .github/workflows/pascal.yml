@@ -1,0 +1,178 @@
+name: Pascal Build
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'pascal/**'
+      - '.github/workflows/pascal.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'pascal/**'
+  workflow_dispatch:
+    inputs:
+      build_dos:
+        description: 'Build DOS 32-bit (DPMI)'
+        required: false
+        default: true
+        type: boolean
+      build_win32:
+        description: 'Build Windows 32-bit'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  FPC_VERSION: '3.2.2'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Free Pascal
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc
+
+      - name: Build Linux binaries
+        working-directory: pascal
+        run: |
+          mkdir -p bin
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/secretorb secretorb.pas
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/editor editor.pas
+
+      - name: Package Linux build
+        working-directory: pascal
+        run: |
+          mkdir -p dist/secretorb-linux
+          cp bin/secretorb bin/editor dist/secretorb-linux/
+          cp data/world.dat dist/secretorb-linux/
+          cp -r data dist/secretorb-linux/
+          tar -czf secretorb-linux-x64.tar.gz -C dist secretorb-linux
+
+      - name: Check binary sizes
+        working-directory: pascal
+        run: |
+          echo "=== Binary sizes ==="
+          ls -lh bin/
+          echo ""
+          echo "=== Package size ==="
+          ls -lh secretorb-linux-x64.tar.gz
+          echo ""
+          echo "=== 720KB floppy check ==="
+          TOTAL=$(du -cb bin/secretorb bin/editor data/world.dat | tail -1 | cut -f1)
+          echo "Total size: $TOTAL bytes"
+          if [ $TOTAL -lt 737280 ]; then
+            echo "PASS: Fits on 720KB floppy (737280 bytes)"
+          else
+            echo "WARN: Exceeds 720KB floppy capacity"
+          fi
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secretorb-linux-x64
+          path: pascal/secretorb-linux-x64.tar.gz
+
+  build-dos32:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_dos }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Free Pascal cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc fp-units-rtl-go32v2 fp-units-base-go32v2
+
+      - name: Build DOS 32-bit binaries
+        working-directory: pascal
+        run: |
+          mkdir -p bin
+          fpc -Tgo32v2 -O2 -XX -CX -Xs -Fusrc -obin/SECORB.EXE secretorb.pas
+          fpc -Tgo32v2 -O2 -XX -CX -Xs -Fusrc -obin/EDITOR.EXE editor.pas
+
+      - name: Package DOS build
+        working-directory: pascal
+        run: |
+          mkdir -p dist/SECORB
+          cp bin/SECORB.EXE bin/EDITOR.EXE dist/SECORB/
+          cp data/world.dat dist/SECORB/WORLD.DAT
+          cd dist && zip -r ../secretorb-dos32.zip SECORB/
+
+      - name: Check sizes for 720KB floppy
+        working-directory: pascal
+        run: |
+          echo "=== DOS Binary sizes ==="
+          ls -lh bin/
+          echo ""
+          TOTAL=$(du -cb bin/SECORB.EXE bin/EDITOR.EXE data/world.dat | tail -1 | cut -f1)
+          echo "Total size: $TOTAL bytes (limit: 737280 for 720KB)"
+          if [ $TOTAL -lt 737280 ]; then
+            echo "PASS: Fits on 720KB floppy"
+          else
+            echo "WARN: Exceeds 720KB floppy"
+          fi
+
+      - name: Upload DOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secretorb-dos32
+          path: pascal/secretorb-dos32.zip
+
+  build-win32:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_win32 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Free Pascal cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc fp-units-rtl-win32 fp-units-base-win32 fp-utils
+
+      - name: Build Windows 32-bit binaries
+        working-directory: pascal
+        run: |
+          mkdir -p bin
+          fpc -Twin32 -O2 -XX -CX -Xs -Fusrc -obin/secretorb.exe secretorb.pas
+          fpc -Twin32 -O2 -XX -CX -Xs -Fusrc -obin/editor.exe editor.pas
+
+      - name: Package Windows build
+        working-directory: pascal
+        run: |
+          mkdir -p dist/secretorb-win32
+          cp bin/secretorb.exe bin/editor.exe dist/secretorb-win32/
+          cp data/world.dat dist/secretorb-win32/
+          cd dist && zip -r ../secretorb-win32.zip secretorb-win32/
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secretorb-win32
+          path: pascal/secretorb-win32.zip
+
+  release:
+    needs: [build-linux, build-dos32, build-win32]
+    runs-on: ubuntu-latest
+    if: always() && needs.build-linux.result == 'success'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh
+
+      - name: Upload combined release
+        uses: actions/upload-artifact@v4
+        with:
+          name: secretorb-all-platforms
+          path: |
+            secretorb-*.tar.gz
+            secretorb-*.zip
+          retention-days: 30
