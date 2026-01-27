@@ -61,53 +61,53 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    env:
+      FPC_VERSION: "3.2.2"
+      FPC_DIR: "C:\\fpc"
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Free Pascal
+      - name: Download and Install Free Pascal
         shell: pwsh
         run: |
-          choco install freepascal -y --no-progress
-          # Chocolatey installs FPC to C:\FPC\<version>\bin\<arch>
-          # Add all possible bin paths
-          $paths = @(
-            "C:\FPC\3.2.2\bin\i386-win32",
-            "C:\FPC\3.2.2\bin\x86_64-win64",
-            "C:\lazarus\fpc\3.2.2\bin\i386-win32",
-            "C:\lazarus\fpc\3.2.2\bin\x86_64-win64"
-          )
-          foreach ($p in $paths) {
-            if (Test-Path $p) {
-              Write-Host "Adding to PATH: $p"
-              echo $p | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $fpcZip = "fpc-${{ env.FPC_VERSION }}.i386-win32.zip"
+          $fpcUrl = "https://sourceforge.net/projects/freepascal/files/Win32/${{ env.FPC_VERSION }}/$fpcZip/download"
+
+          Write-Host "Downloading FPC from: $fpcUrl"
+          Invoke-WebRequest -Uri $fpcUrl -OutFile $fpcZip -UseBasicParsing
+
+          Write-Host "Extracting to ${{ env.FPC_DIR }}..."
+          Expand-Archive -Path $fpcZip -DestinationPath ${{ env.FPC_DIR }} -Force
+
+          Write-Host "Contents of ${{ env.FPC_DIR }}:"
+          Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Depth 2 | Select-Object FullName
+
+          # Find the bin directory
+          $binDir = Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Directory -Filter "bin" | Select-Object -First 1
+          if ($binDir) {
+            $fpcBin = Get-ChildItem -Path $binDir.FullName -Recurse -Directory | Where-Object { $_.Name -like "i386-win32" -or $_.Name -like "x86_64-win64" } | Select-Object -First 1
+            if ($fpcBin) {
+              Write-Host "Adding to PATH: $($fpcBin.FullName)"
+              echo $fpcBin.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            } else {
+              Write-Host "Adding bin directory to PATH: $($binDir.FullName)"
+              echo $binDir.FullName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
             }
           }
 
       - name: Verify FPC installation
         shell: pwsh
         run: |
-          Write-Host "PATH entries:"
-          $env:PATH -split ';' | Where-Object { $_ -like '*fpc*' -or $_ -like '*FPC*' }
-          Write-Host ""
-          Write-Host "Checking fpc command..."
-          $fpcCmd = Get-Command fpc -ErrorAction SilentlyContinue
-          if ($fpcCmd) {
-            Write-Host "FPC found at: $($fpcCmd.Source)"
-            fpc -iV
+          Write-Host "Looking for fpc.exe..."
+          $fpc = Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Filter "fpc.exe" | Select-Object -First 1
+          if ($fpc) {
+            Write-Host "Found: $($fpc.FullName)"
+            & $fpc.FullName -iV
+            # Store path for later use
+            $fpc.DirectoryName | Out-File -FilePath fpc_path.txt -Encoding utf8
           } else {
-            Write-Host "FPC not in PATH, checking known locations..."
-            $locations = @(
-              "C:\FPC\3.2.2\bin\i386-win32\fpc.exe",
-              "C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe"
-            )
-            foreach ($loc in $locations) {
-              if (Test-Path $loc) {
-                Write-Host "Found: $loc"
-                $dir = Split-Path $loc
-                echo $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-                break
-              }
-            }
+            Write-Host "ERROR: fpc.exe not found!"
+            exit 1
           }
 
       - name: Build Windows binaries
@@ -115,14 +115,15 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          # Use explicit path if fpc not in PATH
-          $fpcExe = "fpc"
-          if (-not (Get-Command fpc -ErrorAction SilentlyContinue)) {
-            $fpcExe = "C:\FPC\3.2.2\bin\i386-win32\fpc.exe"
-            if (-not (Test-Path $fpcExe)) {
-              $fpcExe = "C:\FPC\3.2.2\bin\x86_64-win64\fpc.exe"
-            }
+
+          # Get FPC path
+          $fpcDir = Get-Content ..\fpc_path.txt -ErrorAction SilentlyContinue
+          if ($fpcDir) {
+            $fpcExe = Join-Path $fpcDir "fpc.exe"
+          } else {
+            $fpcExe = "fpc"
           }
+
           Write-Host "Using FPC: $fpcExe"
           & $fpcExe -O2 -XX -CX -Xs -Fusrc -obin\secretorb.exe secretorb.pas
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
