@@ -65,15 +65,48 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Free Pascal
-        run: choco install freepascal -y
+        shell: pwsh
+        run: |
+          choco install freepascal -y --no-progress
+          # Add FPC to PATH for subsequent steps
+          $fpcPath = "C:\FPC\3.2.2\bin\i386-win32"
+          if (Test-Path $fpcPath) {
+            echo "$fpcPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          # Also try x86_64 path
+          $fpcPath64 = "C:\FPC\3.2.2\bin\x86_64-win64"
+          if (Test-Path $fpcPath64) {
+            echo "$fpcPath64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
+      - name: Verify FPC installation
+        shell: pwsh
+        run: |
+          # Find fpc.exe
+          $fpc = Get-ChildItem -Path "C:\FPC" -Recurse -Filter "fpc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($fpc) {
+            Write-Host "Found FPC at: $($fpc.FullName)"
+            $fpcDir = $fpc.DirectoryName
+            echo "$fpcDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            Write-Host "FPC not found in C:\FPC, searching Program Files..."
+            $fpc = Get-ChildItem -Path "C:\Program Files" -Recurse -Filter "fpc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($fpc) {
+              Write-Host "Found FPC at: $($fpc.FullName)"
+              $fpcDir = $fpc.DirectoryName
+              echo "$fpcDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            }
+          }
 
       - name: Build Windows binaries
         working-directory: pascal
-        shell: cmd
+        shell: pwsh
         run: |
-          mkdir bin
+          New-Item -ItemType Directory -Force -Path bin | Out-Null
           fpc -O2 -XX -CX -Xs -Fusrc -obin\secretorb.exe secretorb.pas
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           fpc -O2 -XX -CX -Xs -Fusrc -obin\editor.exe editor.pas
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package Windows build
         working-directory: pascal
@@ -110,48 +143,57 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Free Pascal and DOS cross-compiler
+      - name: Check for DOS cross-compiler
+        id: check-dos
         run: |
+          # Ubuntu's FPC package doesn't include go32v2 cross-compiler
+          # We need to check if it's available
           sudo apt-get update
           sudo apt-get install -y fpc
 
-          # Download FPC DOS cross-compiler from official source
-          FPC_VERSION="3.2.2"
-          ARCH="x86_64-linux"
-
-          # Install the go32v2 cross-compiler
-          wget -q "https://sourceforge.net/projects/freepascal/files/Linux/${FPC_VERSION}/fpc-${FPC_VERSION}.${ARCH}.tar/download" -O fpc-cross.tar || true
-
-          # If SourceForge download fails, try alternative
-          if [ ! -s fpc-cross.tar ]; then
-            echo "Note: DOS cross-compiler not available via package, skipping DOS build"
-            echo "DOS_BUILD_SKIP=true" >> $GITHUB_ENV
+          # Test if go32v2 target is available
+          if fpc -h 2>&1 | grep -q "go32v2"; then
+            echo "dos_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "dos_available=false" >> $GITHUB_OUTPUT
+            echo "Note: DOS cross-compiler (go32v2) not available in this FPC installation"
           fi
 
       - name: Build DOS 32-bit binaries
-        if: env.DOS_BUILD_SKIP != 'true'
+        if: steps.check-dos.outputs.dos_available == 'true'
         working-directory: pascal
         run: |
           mkdir -p bin
           fpc -Tgo32v2 -O2 -XX -CX -Xs -Fusrc -obin/SECORB.EXE secretorb.pas
           fpc -Tgo32v2 -O2 -XX -CX -Xs -Fusrc -obin/EDITOR.EXE editor.pas
 
-      - name: Create placeholder if skipped
-        if: env.DOS_BUILD_SKIP == 'true'
-        working-directory: pascal
-        run: |
-          mkdir -p dist/SECORB
-          echo "DOS build requires manual cross-compiler setup." > dist/SECORB/README.txt
-          echo "Use 'fpc -Tgo32v2' with FPC cross-compiler installed." >> dist/SECORB/README.txt
-          cd dist && zip -r ../secretorb-dos32.zip SECORB/
-
       - name: Package DOS build
-        if: env.DOS_BUILD_SKIP != 'true'
+        if: steps.check-dos.outputs.dos_available == 'true'
         working-directory: pascal
         run: |
           mkdir -p dist/SECORB
           cp bin/SECORB.EXE bin/EDITOR.EXE dist/SECORB/
           cp data/world.dat dist/SECORB/WORLD.DAT
+          cd dist && zip -r ../secretorb-dos32.zip SECORB/
+
+      - name: Create placeholder (DOS unavailable)
+        if: steps.check-dos.outputs.dos_available != 'true'
+        working-directory: pascal
+        run: |
+          mkdir -p dist/SECORB
+          cat > dist/SECORB/README.txt << 'ENDREADME'
+          DOS Build Not Available
+          ========================
+          The go32v2 (DOS 32-bit DPMI) cross-compiler is not available
+          in GitHub Actions' Ubuntu runner.
+
+          To build DOS executables locally:
+          1. Install FPC with go32v2 cross-compiler support
+          2. Run: fpc -Tgo32v2 -O2 secretorb.pas
+          3. Run: fpc -Tgo32v2 -O2 editor.pas
+
+          The resulting .EXE files will run on DOS with CWSDPMI.
+          ENDREADME
           cd dist && zip -r ../secretorb-dos32.zip SECORB/
 
       - name: Upload DOS artifact
