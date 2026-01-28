@@ -114,26 +114,50 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path bin | Out-Null
 
-          # Get FPC path
-          $fpcDir = Get-Content ..\fpc_path.txt -ErrorAction SilentlyContinue
-          if ($fpcDir) {
-            $fpcExe = Join-Path $fpcDir "fpc.exe"
-          } else {
-            $fpcExe = "fpc"
-          }
+          # Use FPC from known install location
+          $fpcExe = "${{ env.FPC_DIR }}\bin\i386-win32\fpc.exe"
 
           Write-Host "Using FPC: $fpcExe"
+          Write-Host "FPC exists: $(Test-Path $fpcExe)"
+
+          if (-not (Test-Path $fpcExe)) {
+            Write-Host "ERROR: FPC not found at expected path"
+            Write-Host "Searching for fpc.exe..."
+            Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Filter "fpc.exe" | Select-Object FullName
+            exit 1
+          }
+
+          Write-Host "Compiling secretorb.pas..."
           & $fpcExe -O2 -XX -CX -Xs -Fusrc -obin\secretorb.exe secretorb.pas
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exitCode1 = $LASTEXITCODE
+          Write-Host "Exit code: $exitCode1"
+
+          Write-Host "Compiling editor.pas..."
           & $fpcExe -O2 -XX -CX -Xs -Fusrc -obin\editor.exe editor.pas
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exitCode2 = $LASTEXITCODE
+          Write-Host "Exit code: $exitCode2"
+
+          Write-Host "Contents of bin directory:"
+          Get-ChildItem -Path bin -ErrorAction SilentlyContinue | Select-Object Name, Length
+
+          if ($exitCode1 -ne 0) { exit $exitCode1 }
+          if ($exitCode2 -ne 0) { exit $exitCode2 }
 
       - name: Package Windows build
         working-directory: pascal
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist\secretorb-win
-          Copy-Item bin\secretorb.exe, bin\editor.exe dist\secretorb-win\
+          Write-Host "Checking bin directory..."
+          if (-not (Test-Path bin\secretorb.exe)) {
+            Write-Host "ERROR: secretorb.exe not found!"
+            Write-Host "bin contents:"
+            Get-ChildItem -Path bin -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+          New-Item -ItemType Directory -Force -Path dist\secretorb-win | Out-Null
+          Copy-Item bin\secretorb.exe dist\secretorb-win\
+          Copy-Item bin\editor.exe dist\secretorb-win\
           Copy-Item data\world.dat dist\secretorb-win\
           Compress-Archive -Path dist\secretorb-win -DestinationPath secretorb-win32.zip
 
