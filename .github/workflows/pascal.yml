@@ -151,11 +151,12 @@ jobs:
           Get-ChildItem -Path bin -ErrorAction SilentlyContinue
 
           # FPC creates files without .exe extension, rename them
+          # Use Move-Item instead of Rename-Item to avoid PowerShell path issues
           if (Test-Path bin\secretorb) {
-            Rename-Item bin\secretorb bin\secretorb.exe
+            Move-Item -Path bin\secretorb -Destination bin\secretorb.exe -Force
           }
           if (Test-Path bin\editor) {
-            Rename-Item bin\editor bin\editor.exe
+            Move-Item -Path bin\editor -Destination bin\editor.exe -Force
           }
 
           if (-not (Test-Path bin\secretorb.exe)) {
