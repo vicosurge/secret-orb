@@ -148,10 +148,18 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Checking bin directory..."
+          Get-ChildItem -Path bin -ErrorAction SilentlyContinue
+
+          # FPC creates files without .exe extension, rename them
+          if (Test-Path bin\secretorb) {
+            Rename-Item bin\secretorb bin\secretorb.exe
+          }
+          if (Test-Path bin\editor) {
+            Rename-Item bin\editor bin\editor.exe
+          }
+
           if (-not (Test-Path bin\secretorb.exe)) {
-            Write-Host "ERROR: secretorb.exe not found!"
-            Write-Host "bin contents:"
-            Get-ChildItem -Path bin -ErrorAction SilentlyContinue
+            Write-Host "ERROR: secretorb.exe not found after rename!"
             exit 1
           }
 
