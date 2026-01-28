@@ -8,5 +8,7 @@ pascal/*.tar.gz
 pascal/*.zip
 *.o
 *.ppu
-*.exe
-*.EXE
+
+# Compiled executables (but allow FPC installer)
+pascal/bin/*.exe
+!fpc-*.exe

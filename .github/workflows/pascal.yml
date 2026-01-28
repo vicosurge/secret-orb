@@ -67,62 +67,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download and Install Free Pascal
+      - name: Install Free Pascal
         shell: pwsh
         run: |
-          # Use direct mirror link to avoid SourceForge redirects
-          $fpcZip = "fpc-${{ env.FPC_VERSION }}.i386-win32.zip"
+          # Use the installer from the repository
+          $installer = "fpc-${{ env.FPC_VERSION }}.i386-win32.exe"
 
-          # Try multiple mirrors
-          $mirrors = @(
-            "https://downloads.sourceforge.net/project/freepascal/Win32/${{ env.FPC_VERSION }}/$fpcZip",
-            "https://netcologne.dl.sourceforge.net/project/freepascal/Win32/${{ env.FPC_VERSION }}/$fpcZip",
-            "https://freefr.dl.sourceforge.net/project/freepascal/Win32/${{ env.FPC_VERSION }}/$fpcZip"
-          )
+          Write-Host "Running FPC installer in silent mode..."
+          Write-Host "Installer: $installer"
 
-          $downloaded = $false
-          foreach ($url in $mirrors) {
-            Write-Host "Trying: $url"
-            try {
-              Invoke-WebRequest -Uri $url -OutFile $fpcZip -UseBasicParsing -MaximumRedirection 5
-              $fileSize = (Get-Item $fpcZip).Length
-              Write-Host "Downloaded $fileSize bytes"
-              if ($fileSize -gt 1000000) {
-                $downloaded = $true
-                break
-              } else {
-                Write-Host "File too small, trying next mirror..."
-              }
-            } catch {
-              Write-Host "Failed: $_"
-            }
-          }
+          # Run installer silently, install to C:\fpc
+          Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/DIR=${{ env.FPC_DIR }}", "/NORESTART" -Wait -NoNewWindow
 
-          if (-not $downloaded) {
-            Write-Host "ERROR: Could not download FPC from any mirror"
-            exit 1
-          }
-
-          Write-Host "Extracting with 7zip to ${{ env.FPC_DIR }}..."
-          New-Item -ItemType Directory -Force -Path ${{ env.FPC_DIR }} | Out-Null
-          7z x $fpcZip -o"${{ env.FPC_DIR }}" -y
-
-          Write-Host "Contents of ${{ env.FPC_DIR }}:"
-          Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Depth 2 | Select-Object FullName
+          Write-Host "Installation complete. Contents of ${{ env.FPC_DIR }}:"
+          Get-ChildItem -Path ${{ env.FPC_DIR }} -Depth 1 | Select-Object Name
 
       - name: Verify FPC installation
         shell: pwsh
         run: |
-          Write-Host "Looking for fpc.exe..."
-          $fpc = Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Filter "fpc.exe" | Select-Object -First 1
-          if ($fpc) {
-            Write-Host "Found: $($fpc.FullName)"
-            & $fpc.FullName -iV
-            # Store path for later use
-            $fpc.DirectoryName | Out-File -FilePath fpc_path.txt -Encoding utf8
+          Write-Host "Looking for fpc.exe in ${{ env.FPC_DIR }}..."
+
+          # Check expected location first
+          $expectedPath = "${{ env.FPC_DIR }}\bin\i386-win32\fpc.exe"
+          if (Test-Path $expectedPath) {
+            Write-Host "Found at expected location: $expectedPath"
+            & $expectedPath -iV
+            "${{ env.FPC_DIR }}\bin\i386-win32" | Out-File -FilePath fpc_path.txt -Encoding utf8
           } else {
-            Write-Host "ERROR: fpc.exe not found!"
-            exit 1
+            # Search for it
+            $fpc = Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse -Filter "fpc.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($fpc) {
+              Write-Host "Found: $($fpc.FullName)"
+              & $fpc.FullName -iV
+              $fpc.DirectoryName | Out-File -FilePath fpc_path.txt -Encoding utf8
+            } else {
+              Write-Host "ERROR: fpc.exe not found!"
+              Write-Host "Directory contents:"
+              Get-ChildItem -Path ${{ env.FPC_DIR }} -Recurse | Select-Object FullName
+              exit 1
+            }
           }
 
       - name: Build Windows binaries
