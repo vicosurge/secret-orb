@@ -1,8 +1,8 @@
 # Secret Orb
 
 ```
-  ___                 _      ___       _
- / __| ___  __ _ _ __| |_   / _ \ _ _ | |__
+  ___                  _      ___       _
+ / __| ___  __ _ _ ___| |_   / _ \ _ _ | |__
  \__ \/ -_)/ _| '_/ -_)  _| | (_) | '_|| '_ \
  |___/\___|\__|_| \___|\__|  \___/|_|  |_.__/
 
@@ -313,8 +313,8 @@ Inspired by classic text adventures from the golden age of computing.
 
 ## 🔗 Links
 
-- [GitHub Repository](https://github.com/yourusername/secret-orb)
-- [Issue Tracker](https://github.com/yourusername/secret-orb/issues)
+- [GitHub Repository](https://github.com/vicosurge/secret-orb)
+- [Issue Tracker](https://github.com/vicosurge/secret-orb/issues)
 - [Free Pascal](https://www.freepascal.org/)
 
 ---
