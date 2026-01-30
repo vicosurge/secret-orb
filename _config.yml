@@ -5,8 +5,8 @@ theme: null
 markdown: kramdown
 
 # Site metadata
-author: Your Name
-url: https://yourusername.github.io
+author: Vicente Manuel Muñoz Milchorena
+url: https://vicosurge.github.io
 baseurl: /secret-orb
 
 # Exclude from build
