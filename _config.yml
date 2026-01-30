@@ -1,0 +1,20 @@
+# GitHub Pages Configuration
+title: Secret Orb
+description: A retro text-based adventure game for 720KB floppy disks
+theme: null
+markdown: kramdown
+
+# Site metadata
+author: Your Name
+url: https://yourusername.github.io
+baseurl: /secret-orb
+
+# Exclude from build
+exclude:
+  - pascal/
+  - .git/
+  - .github/
+  - .gitignore
+  - fpc-*.exe
+  - CLAUDE.md
+  - Cargo.lock

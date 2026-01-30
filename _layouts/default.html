@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page.title | default: site.title }}</title>
+  <meta name="description" content="{{ page.description | default: site.description }}">
+  <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="crt-overlay"></div>
+  <div class="scanlines"></div>
+
+  <div class="terminal-container">
+    <div class="terminal-header">
+      <span class="terminal-title">SECRET_ORB.EXE</span>
+      <span class="terminal-controls">
+        <span class="btn-minimize">_</span>
+        <span class="btn-maximize">□</span>
+        <span class="btn-close">×</span>
+      </span>
+    </div>
+
+    <div class="terminal-content">
+      <div class="boot-sequence">
+        <span class="cursor-blink">█</span>
+      </div>
+
+      <main id="main-content">
+        {{ content }}
+      </main>
+
+      <footer class="terminal-footer">
+        <div class="status-bar">
+          <span>{{ site.title }} | Built with Free Pascal</span>
+          <span class="footer-right">Press any key to continue...</span>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    // Boot sequence animation
+    window.addEventListener('load', function() {
+      const bootSeq = document.querySelector('.boot-sequence');
+      const mainContent = document.querySelector('#main-content');
+
+      setTimeout(function() {
+        bootSeq.style.display = 'none';
+        mainContent.style.display = 'block';
+      }, 1500);
+    });
+
+    // Smooth scroll for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth' });
+        }
+      });
+    });
+  </script>
+</body>
+</html>
