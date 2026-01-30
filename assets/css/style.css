@@ -5,10 +5,10 @@
   /* Color palette - Green phosphor CRT */
   --bg-primary: #0a0e0a;
   --bg-secondary: #0d120d;
-  --text-primary: #33ff33;
-  --text-secondary: #00cc00;
+  --text-primary: #33dd33;
+  --text-secondary: #00bb00;
   --text-dim: #008800;
-  --accent: #00ff00;
+  --accent: #00ee00;
   --highlight: #ffff00;
   --error: #ff3333;
 
@@ -39,7 +39,7 @@ body {
   color: var(--text-primary);
   background: var(--bg-primary);
   overflow-x: hidden;
-  text-shadow: 0 0 5px var(--text-primary);
+  text-shadow: 0 0 2px rgba(51, 221, 51, 0.5);
 }
 
 /* CRT Effect Overlay */
@@ -218,7 +218,7 @@ a {
 a:hover {
   color: var(--accent);
   border-bottom-color: var(--accent);
-  text-shadow: 0 0 8px var(--accent);
+  text-shadow: 0 0 3px var(--accent);
 }
 
 /* Code blocks */
@@ -334,7 +334,7 @@ pre:has(code:only-child) {
   font-size: 14px;
   line-height: 1.2;
   color: var(--accent);
-  text-align: center;
+  /* text-align: left by default - only center specific ASCII art blocks */
 }
 
 /* Emoji styling */
