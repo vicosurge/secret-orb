@@ -28,3 +28,39 @@ NORTH=0
 SOUTH=0
 EAST=0
 WEST=0
+
+[OBJECT:1]
+NAME=Rusty Key
+DESC=An old iron key, covered in rust. It looks like it might open something.
+ROOM=1
+CARRIEDBY=0
+FLAGS=pickup,use
+USETEXT=The key might unlock a door somewhere.
+
+[OBJECT:2]
+NAME=Ancient Scroll
+DESC=A yellowed parchment scroll covered in faded runes and mystical symbols.
+ROOM=2
+CARRIEDBY=0
+FLAGS=pickup,read
+USETEXT=The scroll reads: "Seek the orb in the darkest room, where shadows dance and secrets loom."
+
+[OBJECT:3]
+NAME=Glowing Orb
+DESC=A mysterious sphere that pulses with inner light. This must be the legendary Secret Orb!
+ROOM=3
+CARRIEDBY=0
+FLAGS=pickup,use
+USETEXT=The orb grows warm in your hands, filling you with a sense of power and purpose.
+
+[MOB:1]
+NAME=Old Guard
+DESC=A grizzled veteran in worn armor. His eyes are watchful but weary.
+ROOM=1
+DIALOGUE=Halt! State your business, traveler. Beware the shadows in the back rooms.
+
+[MOB:2]
+NAME=Mysterious Scholar
+DESC=A robed figure hunched over ancient texts. Strange symbols glow faintly on their robes.
+ROOM=2
+DIALOGUE=Ah, a seeker of knowledge! The orb you seek lies beyond, but darkness guards it well.
