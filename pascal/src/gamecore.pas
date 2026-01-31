@@ -11,7 +11,7 @@ uses
 type
   TCommandType = (
     cmdNone,
-    cmdNorth, cmdSouth, cmdEast, cmdWest,
+    cmdNorth, cmdSouth, cmdEast, cmdWest, cmdUp, cmdDown,
     cmdLook,
     cmdHelp,
     cmdQuit,
@@ -100,6 +100,10 @@ begin
     Result := cmdEast
   else if (Cmd = 'W') or (Cmd = 'WEST') then
     Result := cmdWest
+  else if (Cmd = 'U') or (Cmd = 'UP') then
+    Result := cmdUp
+  else if (Cmd = 'D') or (Cmd = 'DOWN') then
+    Result := cmdDown
   else if (Cmd = 'L') or (Cmd = 'LOOK') then
     Result := cmdLook
   else if (Cmd = 'H') or (Cmd = 'HELP') or (Cmd = '?') then
@@ -175,6 +179,8 @@ begin
     cmdSouth: MovePlayer(G, dirSouth);
     cmdEast:  MovePlayer(G, dirEast);
     cmdWest:  MovePlayer(G, dirWest);
+    cmdUp:    MovePlayer(G, dirUp);
+    cmdDown:  MovePlayer(G, dirDown);
     cmdLook:  G.LastMessage := '';
     cmdHelp:  ShowHelp;
     cmdQuit:  G.State := gsQuit;
@@ -300,24 +306,26 @@ begin
   WriteAt(5, 6, 'S, SOUTH  - Go south');
   WriteAt(5, 7, 'E, EAST   - Go east');
   WriteAt(5, 8, 'W, WEST   - Go west');
+  WriteAt(5, 9, 'U, UP     - Go up');
+  WriteAt(5, 10, 'D, DOWN   - Go down');
 
-  WriteAt(3, 10, 'Interactions:');
-  WriteAt(5, 11, 'EXAMINE <thing>  - Look at something closely');
-  WriteAt(5, 12, 'TAKE <object>    - Pick up an object');
-  WriteAt(5, 13, 'DROP <object>    - Drop an object');
-  WriteAt(5, 14, 'USE <object>     - Use an object');
-  WriteAt(5, 15, 'OPEN <object>    - Open an object');
-  WriteAt(5, 16, 'READ <object>    - Read an object');
-  WriteAt(5, 17, 'TALK <person>    - Talk to someone');
-  WriteAt(5, 18, 'I, INVENTORY     - Show inventory');
+  WriteAt(3, 12, 'Interactions:');
+  WriteAt(5, 13, 'EXAMINE <thing>  - Look at something closely');
+  WriteAt(5, 14, 'TAKE <object>    - Pick up an object');
+  WriteAt(5, 15, 'DROP <object>    - Drop an object');
+  WriteAt(5, 16, 'USE <object>     - Use an object');
+  WriteAt(5, 17, 'OPEN <object>    - Open an object');
+  WriteAt(5, 18, 'READ <object>    - Read an object');
+  WriteAt(5, 19, 'TALK <person>    - Talk to someone');
+  WriteAt(5, 20, 'I, INVENTORY     - Show inventory');
 
-  WriteAt(3, 20, 'Other:');
-  WriteAt(5, 21, 'L, LOOK   - Look around');
-  WriteAt(5, 22, 'H, HELP   - Show this help');
-  WriteAt(5, 23, 'Q, QUIT   - Quit the game');
+  WriteAt(3, 22, 'Other:');
+  WriteAt(5, 23, 'L, LOOK   - Look around');
+  WriteAt(5, 24, 'H, HELP   - Show this help');
+  WriteAt(5, 25, 'Q, QUIT   - Quit the game');
 
   SetColor(Cyan, Black);
-  WriteCenter(25, 'Press any key to continue...');
+  WriteCenter(26, 'Press any key to continue...');
   ResetColor;
   WaitKey;
 end;

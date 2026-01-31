@@ -18,7 +18,7 @@ const
   DIR_NONE = 0;
 
 type
-  TDirection = (dirNorth, dirSouth, dirEast, dirWest);
+  TDirection = (dirNorth, dirSouth, dirEast, dirWest, dirUp, dirDown);
 
   TRoom = record
     ID: Word;
@@ -143,6 +143,8 @@ begin
     dirSouth: Result := 'South';
     dirEast:  Result := 'East';
     dirWest:  Result := 'West';
+    dirUp:    Result := 'Up';
+    dirDown:  Result := 'Down';
   else
     Result := '?';
   end;
@@ -152,15 +154,20 @@ function ParseDirection(const S: string): TDirection;
 var
   U: string;
 begin
-  U := UpCase(S[1]);
-  case U[1] of
-    'N': Result := dirNorth;
-    'S': Result := dirSouth;
-    'E': Result := dirEast;
-    'W': Result := dirWest;
+  U := UpCase(S);
+  if (U = 'U') or (U = 'UP') then
+    Result := dirUp
+  else if (U = 'D') or (U = 'DOWN') then
+    Result := dirDown
   else
-    Result := dirNorth;
-  end;
+    case U[1] of
+      'N': Result := dirNorth;
+      'S': Result := dirSouth;
+      'E': Result := dirEast;
+      'W': Result := dirWest;
+    else
+      Result := dirNorth;
+    end;
 end;
 
 function DirectionValid(Dir: TDirection): Boolean;

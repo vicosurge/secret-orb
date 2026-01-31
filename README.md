@@ -23,7 +23,8 @@ A retro text-based adventure game designed to fit on a single 720KB floppy disk.
 - 🖥️ **Cross-Platform**: Runs on DOS (16-bit and 32-bit), Windows, Linux, and other Unix systems
 - 🏗️ **Modular Architecture**: Clean separation between game engine and world data
 - ✏️ **World Editor**: Included TUI-based editor for creating your own adventures
-- 📄 **Human-Readable Data**: World files use simple text format for easy editing
+- 📄 **Dual Format Support**: Binary format for space efficiency, text format for easy editing
+- 🧭 **6-Direction Movement**: Navigate in all directions including up and down
 - 🎨 **Retro Aesthetics**: 80x25 character display with classic CRT colors
 
 ### Project Goals
@@ -100,6 +101,8 @@ Secret Orb uses a simple text parser. Type commands at the prompt:
 - `south` or `s` - Move south
 - `east` or `e` - Move east
 - `west` or `w` - Move west
+- `up` or `u` - Go up (stairs, ladders, etc.)
+- `down` or `d` - Go down (descend, climb down, etc.)
 
 #### Interaction
 - `look` - Examine your surroundings
@@ -165,6 +168,9 @@ make native
 # Or use the build script
 ./build.sh native
 
+# Build the converter tool
+make converter
+
 # Cross-compile for other platforms
 make dos32    # DOS 32-bit DPMI
 make win32    # Windows 32-bit
@@ -192,9 +198,11 @@ pascal/
 ├── editor.pas         # World editor (main entry point)
 ├── src/
 │   ├── gamedata.pas   # Core data structures (rooms, objects, mobs)
-│   ├── datafile.pas   # World file I/O (load/save)
+│   ├── datafile.pas   # World file I/O (text and binary formats)
 │   ├── display.pas    # Terminal display abstraction
 │   └── gamecore.pas   # Game engine & command processing
+├── tools/
+│   └── converter.pas  # Text-to-binary format converter
 ├── data/
 │   └── world.dat      # Default game world
 └── bin/               # Compiled executables (created by build)
@@ -218,7 +226,18 @@ The editor provides a menu-driven interface to:
 
 #### Manual Editing
 
-World files use a simple INI-style text format. You can edit them directly:
+World files support two formats:
+
+1. **Binary Format** (default): Compact, space-efficient format saved automatically by the editor
+2. **Text Format**: Human-readable INI-style format for manual editing
+
+You can edit text format files directly and convert them to binary using the converter tool:
+
+```bash
+./converter world.txt world.dat
+```
+
+**Text Format Example:**
 
 ```ini
 [WORLD]
@@ -232,6 +251,8 @@ NORTH=2
 SOUTH=0
 EAST=0
 WEST=0
+UP=3
+DOWN=0
 
 [OBJECT:1]
 NAME=Magic Sword

@@ -108,13 +108,15 @@ begin
       else
         SetColor(LightGray, Black);
 
-      WriteAt(3, Y, Format('%3d: %-40s [N:%d S:%d E:%d W:%d]',
+      WriteAt(3, Y, Format('%3d: %-32s [N:%d S:%d E:%d W:%d U:%d D:%d]',
         [World.Rooms[I].ID,
          World.Rooms[I].Name,
          World.Rooms[I].Exits[dirNorth],
          World.Rooms[I].Exits[dirSouth],
          World.Rooms[I].Exits[dirEast],
-         World.Rooms[I].Exits[dirWest]]));
+         World.Rooms[I].Exits[dirWest],
+         World.Rooms[I].Exits[dirUp],
+         World.Rooms[I].Exits[dirDown]]));
       Inc(Y);
       ResetColor;
     end;
@@ -198,13 +200,23 @@ begin
     WriteAt(20, 16, IntToStr(R.Exits[dirWest]) + '    ');
     ResetColor;
 
+    if Field = 6 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 17, 'Up Exit:     ');
+    WriteAt(20, 17, IntToStr(R.Exits[dirUp]) + '    ');
+    ResetColor;
+
+    if Field = 7 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 18, 'Down Exit:   ');
+    WriteAt(20, 18, IntToStr(R.Exits[dirDown]) + '    ');
+    ResetColor;
+
     SetColor(Cyan, Black);
     WriteAt(1, 20, 'Tab: Next Field  Enter: Edit Field  F2: Save  Esc: Cancel');
     ResetColor;
 
     case ReadKey of
       #9: { Tab }
-        Field := (Field + 1) mod 6;
+        Field := (Field + 1) mod 8;
       #13: { Enter - edit current field }
         begin
           case Field of
@@ -232,6 +244,14 @@ begin
                  S := ReadLine(20, 16, 5);
                  R.Exits[dirWest] := StrToIntDef(S, R.Exits[dirWest]);
                end;
+            6: begin
+                 S := ReadLine(20, 17, 5);
+                 R.Exits[dirUp] := StrToIntDef(S, R.Exits[dirUp]);
+               end;
+            7: begin
+                 S := ReadLine(20, 18, 5);
+                 R.Exits[dirDown] := StrToIntDef(S, R.Exits[dirDown]);
+               end;
           end;
         end;
       #0: { Extended key }
@@ -250,7 +270,7 @@ begin
           #72: { Up }
             if Field > 0 then Dec(Field);
           #80: { Down }
-            if Field < 5 then Inc(Field);
+            if Field < 7 then Inc(Field);
         end;
       #27: { Escape }
         Exit;

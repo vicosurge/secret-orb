@@ -59,13 +59,16 @@ The codebase is organized into modular units in `pascal/src/`:
 
 - **gamedata.pas**: Core data structures and constants
   - Defines `TRoom`, `TGameObject`, `TMob`, and `TGameWorld` records
+  - `TDirection` enum: 6 directions (North, South, East, West, Up, Down)
   - Constants: `MAX_ROOMS=256`, `MAX_OBJECTS=128`, `MAX_MOBS=64`, `MAX_INVENTORY=8`
-  - Helper functions for finding objects/mobs by ID or name
+  - Helper functions for finding objects/mobs by ID or name, parsing directions
 
-- **datafile.pas**: Text-based world file I/O
-  - Loads/saves world data from `.dat` files using INI-style format
-  - Sections: `[WORLD]`, `[ROOM:n]`, `[OBJECT:n]`, `[MOB:n]`
-  - Text format makes worlds human-readable and easy to edit
+- **datafile.pas**: World file I/O (dual format support)
+  - Supports binary format (default, space-efficient) and text format (legacy)
+  - Binary: Packed records with 'SORB' magic signature, BlockRead/BlockWrite
+  - Text: INI-style format with sections `[WORLD]`, `[ROOM:n]`, `[OBJECT:n]`, `[MOB:n]`
+  - Auto-detects format on load, saves binary by default
+  - Includes format converter functions and flag serialization
 
 - **display.pas**: Text display abstraction layer
   - Wraps CRT unit for cross-platform terminal operations
@@ -93,7 +96,23 @@ The codebase is organized into modular units in `pascal/src/`:
 
 ### Data File Format
 
-World files (`.dat`) use a text-based INI-style format:
+World files support two formats with automatic detection:
+
+#### Binary Format (Default)
+
+The editor saves in binary format by default for space efficiency. Structure:
+
+- **Header (16 bytes)**: Magic signature 'SORB', version, counts, start room
+- **Rooms**: Packed TRoomBin records (313 bytes each)
+  - Supports 6 directions: North, South, East, West, Up, Down
+- **Objects**: Packed TGameObjectBin records (242 bytes)
+- **Mobs**: Packed TMobBin records (339 bytes)
+
+Format validation: Magic signature check, version verification, IOResult error handling.
+
+#### Text Format (Legacy/Manual Editing)
+
+Text-based INI-style format, still fully supported for loading:
 
 ```ini
 [WORLD]
@@ -107,6 +126,8 @@ NORTH=room_id
 SOUTH=room_id
 EAST=room_id
 WEST=room_id
+UP=room_id
+DOWN=room_id
 
 [OBJECT:id]
 NAME=Object Name
@@ -122,6 +143,17 @@ DESC=Description
 ROOM=room_id
 DIALOGUE=What the mob says
 ```
+
+#### Format Conversion
+
+Use the converter tool to migrate text worlds to binary:
+
+```bash
+make converter
+bin/converter input.txt output.dat
+```
+
+The game auto-detects format on load (checks for 'SORB' magic signature).
 
 ## Compiler Flags
 

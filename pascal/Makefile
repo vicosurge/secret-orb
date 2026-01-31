@@ -31,6 +31,10 @@ native: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/editor editor.pas
 	cp $(DATADIR)/world.dat $(BINDIR)/
 
+# Converter tool
+converter: $(BINDIR)
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/converter tools/converter.pas
+
 # DOS 16-bit (requires DOS target support in FPC)
 dos: $(BINDIR)
 	$(FPC) $(FPCFLAGS) $(DOS_FLAGS) -o$(BINDIR)/SECORB.EXE secretorb.pas
