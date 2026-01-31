@@ -154,7 +154,7 @@ begin
       NewLine(
       NewItem('~A~bout...', '', kbNoKey, cmAbout, hcNoContext,
       nil)))),
-    nil)))))));
+    nil))))))));
 end;
 
 procedure TEditorApp.HandleEvent(var Event: TEvent);
@@ -301,6 +301,7 @@ var
   InputField: PInputLine;
   Control: Word;
   Filename: string;
+  DefaultFile: string;
 begin
   R.Assign(20, 8, 60, 14);
   Dialog := New(PDialog, Init(R, 'Save World As'));
@@ -313,9 +314,10 @@ begin
     R.Assign(3, 3, 37, 4);
     InputField := New(PInputLine, Init(R, 255));
     if CurrentFile <> '' then
-      InputField^.SetData(CurrentFile)
+      DefaultFile := CurrentFile
     else
-      InputField^.SetData('world.dat');
+      DefaultFile := 'world.dat';
+    InputField^.SetData(DefaultFile);
     Insert(InputField);
 
     R.Assign(8, 5, 18, 7);
@@ -470,7 +472,9 @@ var
   Room: TRoom;
   RoomName, RoomDesc: string;
   NorthStr, SouthStr, EastStr, WestStr, UpStr, DownStr: string;
+  ZeroStr: string;
 begin
+  ZeroStr := '0';
   if World.RoomCount >= MAX_ROOMS then
   begin
     MessageBox('Maximum number of rooms reached!', nil, mfError + mfOKButton);
@@ -506,42 +510,42 @@ begin
     Insert(New(PStaticText, Init(R, 'North Exit:')));
     R.Assign(15, 7, 25, 8);
     NorthField := New(PInputLine, Init(R, 5));
-    NorthField^.SetData('0');
+    NorthField^.SetData(ZeroStr);
     Insert(NorthField);
 
     R.Assign(2, 9, 14, 10);
     Insert(New(PStaticText, Init(R, 'South Exit:')));
     R.Assign(15, 9, 25, 10);
     SouthField := New(PInputLine, Init(R, 5));
-    SouthField^.SetData('0');
+    SouthField^.SetData(ZeroStr);
     Insert(SouthField);
 
     R.Assign(2, 11, 14, 12);
     Insert(New(PStaticText, Init(R, 'East Exit:')));
     R.Assign(15, 11, 25, 12);
     EastField := New(PInputLine, Init(R, 5));
-    EastField^.SetData('0');
+    EastField^.SetData(ZeroStr);
     Insert(EastField);
 
     R.Assign(2, 13, 14, 14);
     Insert(New(PStaticText, Init(R, 'West Exit:')));
     R.Assign(15, 13, 25, 14);
     WestField := New(PInputLine, Init(R, 5));
-    WestField^.SetData('0');
+    WestField^.SetData(ZeroStr);
     Insert(WestField);
 
     R.Assign(2, 15, 14, 16);
     Insert(New(PStaticText, Init(R, 'Up Exit:')));
     R.Assign(15, 15, 25, 16);
     UpField := New(PInputLine, Init(R, 5));
-    UpField^.SetData('0');
+    UpField^.SetData(ZeroStr);
     Insert(UpField);
 
     R.Assign(2, 17, 14, 18);
     Insert(New(PStaticText, Init(R, 'Down Exit:')));
     R.Assign(15, 17, 25, 18);
     DownField := New(PInputLine, Init(R, 5));
-    DownField^.SetData('0');
+    DownField^.SetData(ZeroStr);
     Insert(DownField);
 
     { Buttons }
@@ -615,6 +619,16 @@ begin
 
   Room := World.Rooms[Index];
 
+  { Initialize string variables for SetData }
+  RoomName := Room.Name;
+  RoomDesc := Room.Desc;
+  NorthStr := IntToStr(Room.Exits[dirNorth]);
+  SouthStr := IntToStr(Room.Exits[dirSouth]);
+  EastStr := IntToStr(Room.Exits[dirEast]);
+  WestStr := IntToStr(Room.Exits[dirWest]);
+  UpStr := IntToStr(Room.Exits[dirUp]);
+  DownStr := IntToStr(Room.Exits[dirDown]);
+
   { Create dialog }
   R.Assign(5, 2, 75, 23);
   Dialog := New(PDialog, Init(R, 'Edit Room'));
@@ -626,7 +640,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room Name:')));
     R.Assign(15, 2, 65, 3);
     NameField := New(PInputLine, Init(R, MAX_NAME_LEN));
-    NameField^.SetData(Room.Name);
+    NameField^.SetData(RoomName);
     Insert(NameField);
 
     { Description }
@@ -634,7 +648,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Description:')));
     R.Assign(15, 4, 65, 5);
     DescField := New(PInputLine, Init(R, MAX_DESC_LEN));
-    DescField^.SetData(Room.Desc);
+    DescField^.SetData(RoomDesc);
     Insert(DescField);
 
     { Exits }
@@ -642,42 +656,42 @@ begin
     Insert(New(PStaticText, Init(R, 'North Exit:')));
     R.Assign(15, 7, 25, 8);
     NorthField := New(PInputLine, Init(R, 5));
-    NorthField^.SetData(IntToStr(Room.Exits[dirNorth]));
+    NorthField^.SetData(NorthStr);
     Insert(NorthField);
 
     R.Assign(2, 9, 14, 10);
     Insert(New(PStaticText, Init(R, 'South Exit:')));
     R.Assign(15, 9, 25, 10);
     SouthField := New(PInputLine, Init(R, 5));
-    SouthField^.SetData(IntToStr(Room.Exits[dirSouth]));
+    SouthField^.SetData(SouthStr);
     Insert(SouthField);
 
     R.Assign(2, 11, 14, 12);
     Insert(New(PStaticText, Init(R, 'East Exit:')));
     R.Assign(15, 11, 25, 12);
     EastField := New(PInputLine, Init(R, 5));
-    EastField^.SetData(IntToStr(Room.Exits[dirEast]));
+    EastField^.SetData(EastStr);
     Insert(EastField);
 
     R.Assign(2, 13, 14, 14);
     Insert(New(PStaticText, Init(R, 'West Exit:')));
     R.Assign(15, 13, 25, 14);
     WestField := New(PInputLine, Init(R, 5));
-    WestField^.SetData(IntToStr(Room.Exits[dirWest]));
+    WestField^.SetData(WestStr);
     Insert(WestField);
 
     R.Assign(2, 15, 14, 16);
     Insert(New(PStaticText, Init(R, 'Up Exit:')));
     R.Assign(15, 15, 25, 16);
     UpField := New(PInputLine, Init(R, 5));
-    UpField^.SetData(IntToStr(Room.Exits[dirUp]));
+    UpField^.SetData(UpStr);
     Insert(UpField);
 
     R.Assign(2, 17, 14, 18);
     Insert(New(PStaticText, Init(R, 'Down Exit:')));
     R.Assign(15, 17, 25, 18);
     DownField := New(PInputLine, Init(R, 5));
-    DownField^.SetData(IntToStr(Room.Exits[dirDown]));
+    DownField^.SetData(DownStr);
     Insert(DownField);
 
     { Buttons }
@@ -863,12 +877,14 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, UseTextField: PInputLine;
-  PickupCheck, UseCheck, OpenCheck, ReadCheck: PCheckBoxes;
+  PickupCheck: PCheckBoxes;
   Control: Word;
   Obj: TGameObject;
   ObjName, ObjDesc, RoomIDStr, UseTextStr: string;
-  PickupVal, UseVal, OpenVal, ReadVal: Word;
+  PickupVal: Word;
+  ZeroStr: string;
 begin
+  ZeroStr := '0';
   if World.ObjectCount >= MAX_OBJECTS then
   begin
     MessageBox('Maximum number of objects reached!', nil, mfError + mfOKButton);
@@ -904,7 +920,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData('0');
+    RoomIDField^.SetData(ZeroStr);
     Insert(RoomIDField);
 
     { Flags }
@@ -999,6 +1015,12 @@ begin
 
   Obj := World.Objects[Index];
 
+  { Initialize string variables for SetData }
+  ObjName := Obj.Name;
+  ObjDesc := Obj.Desc;
+  RoomIDStr := IntToStr(Obj.RoomID);
+  UseTextStr := Obj.UseText;
+
   { Create dialog }
   R.Assign(10, 3, 70, 21);
   Dialog := New(PDialog, Init(R, 'Edit Object'));
@@ -1010,7 +1032,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Name:')));
     R.Assign(13, 2, 55, 3);
     NameField := New(PInputLine, Init(R, MAX_OBJ_NAME));
-    NameField^.SetData(Obj.Name);
+    NameField^.SetData(ObjName);
     Insert(NameField);
 
     { Description }
@@ -1018,7 +1040,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Description:')));
     R.Assign(13, 4, 55, 5);
     DescField := New(PInputLine, Init(R, MAX_OBJ_DESC));
-    DescField^.SetData(Obj.Desc);
+    DescField^.SetData(ObjDesc);
     Insert(DescField);
 
     { Room ID }
@@ -1026,7 +1048,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData(IntToStr(Obj.RoomID));
+    RoomIDField^.SetData(RoomIDStr);
     Insert(RoomIDField);
 
     { Flags }
@@ -1056,7 +1078,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Use Text:')));
     R.Assign(13, 13, 55, 14);
     UseTextField := New(PInputLine, Init(R, MAX_OBJ_DESC));
-    UseTextField^.SetData(Obj.UseText);
+    UseTextField^.SetData(UseTextStr);
     Insert(UseTextField);
 
     { Buttons }
@@ -1238,7 +1260,9 @@ var
   Control: Word;
   Mob: TMob;
   MobName, MobDesc, RoomIDStr, DialogueStr: string;
+  ZeroStr: string;
 begin
+  ZeroStr := '0';
   if World.MobCount >= MAX_MOBS then
   begin
     MessageBox('Maximum number of mobs reached!', nil, mfError + mfOKButton);
@@ -1274,7 +1298,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData('0');
+    RoomIDField^.SetData(ZeroStr);
     Insert(RoomIDField);
 
     { Dialogue }
@@ -1344,6 +1368,12 @@ begin
 
   Mob := World.Mobs[Index];
 
+  { Initialize string variables for SetData }
+  MobName := Mob.Name;
+  MobDesc := Mob.Desc;
+  RoomIDStr := IntToStr(Mob.RoomID);
+  DialogueStr := Mob.Dialogue;
+
   { Create dialog }
   R.Assign(10, 5, 70, 17);
   Dialog := New(PDialog, Init(R, 'Edit Mob'));
@@ -1355,7 +1385,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Name:')));
     R.Assign(13, 2, 55, 3);
     NameField := New(PInputLine, Init(R, MAX_OBJ_NAME));
-    NameField^.SetData(Mob.Name);
+    NameField^.SetData(MobName);
     Insert(NameField);
 
     { Description }
@@ -1363,7 +1393,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Description:')));
     R.Assign(13, 4, 55, 5);
     DescField := New(PInputLine, Init(R, MAX_OBJ_DESC));
-    DescField^.SetData(Mob.Desc);
+    DescField^.SetData(MobDesc);
     Insert(DescField);
 
     { Room ID }
@@ -1371,7 +1401,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData(IntToStr(Mob.RoomID));
+    RoomIDField^.SetData(RoomIDStr);
     Insert(RoomIDField);
 
     { Dialogue }
@@ -1379,7 +1409,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Dialogue:')));
     R.Assign(13, 8, 55, 9);
     DialogueField := New(PInputLine, Init(R, MAX_DIALOGUE));
-    DialogueField^.SetData(Mob.Dialogue);
+    DialogueField^.SetData(DialogueStr);
     Insert(DialogueField);
 
     { Buttons }
@@ -1442,6 +1472,10 @@ var
   Control: Word;
   TitleStr, StartRoomStr: string;
 begin
+  { Initialize string variables for SetData }
+  TitleStr := World.Title;
+  StartRoomStr := IntToStr(World.CurrentRoom);
+
   { Create dialog }
   R.Assign(15, 8, 65, 17);
   Dialog := New(PDialog, Init(R, 'World Settings'));
@@ -1453,7 +1487,7 @@ begin
     Insert(New(PStaticText, Init(R, 'World Title:')));
     R.Assign(16, 2, 45, 3);
     TitleField := New(PInputLine, Init(R, MAX_NAME_LEN));
-    TitleField^.SetData(World.Title);
+    TitleField^.SetData(TitleStr);
     Insert(TitleField);
 
     { Start Room }
@@ -1461,7 +1495,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Start Room ID:')));
     R.Assign(16, 4, 26, 5);
     StartRoomField := New(PInputLine, Init(R, 5));
-    StartRoomField^.SetData(IntToStr(World.CurrentRoom));
+    StartRoomField^.SetData(StartRoomStr);
     Insert(StartRoomField);
 
     { Info }
