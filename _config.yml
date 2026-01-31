@@ -6,8 +6,8 @@ markdown: kramdown
 
 # Site metadata
 author: Vicente Manuel Muñoz Milchorena
-url: https://vicosurge.github.io
-baseurl: /secret-orb
+url: https://secret-orb.digimente.xyz
+baseurl: /
 
 # Exclude from build
 exclude:
