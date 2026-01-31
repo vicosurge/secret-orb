@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <ProjectSession>
+    <PathDelim Value="\"/>
+    <Version Value="12"/>
+    <BuildModes Active="Default"/>
+    <Units>
+      <Unit>
+        <Filename Value="roombuilder.lpr"/>
+        <IsPartOfProject Value="True"/>
+        <IsVisibleTab Value="True"/>
+        <TopLine Value="162"/>
+        <CursorPos X="16" Y="188"/>
+        <UsageCount Value="20"/>
+        <Loaded Value="True"/>
+      </Unit>
+    </Units>
+    <JumpHistory HistoryIndex="23">
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="33" Column="33" TopLine="15"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="144" Column="19" TopLine="121"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="140" Column="12" TopLine="121"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="99" Column="29" TopLine="44"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="140" Column="12" TopLine="121"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="147" Column="26" TopLine="121"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="140" Column="12" TopLine="36"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="26" Column="6"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="200" Column="22" TopLine="176"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="199" Column="42" TopLine="176"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="204" Column="19" TopLine="179"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="49" Column="18" TopLine="33"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="234" Column="19" TopLine="209"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="86" Column="35" TopLine="71"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="114" Column="16" TopLine="89"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="130" Column="21" TopLine="105"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="165" Column="33" TopLine="141"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="139" Column="19" TopLine="124"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="81" Column="80" TopLine="77"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="84" Column="3" TopLine="38"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="92" Column="7" TopLine="77"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="97" Column="9" TopLine="82"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="103" Column="10" TopLine="88"/>
+      </Position>
+      <Position>
+        <Filename Value="roombuilder.lpr"/>
+        <Caret Line="176" Column="35" TopLine="155"/>
+      </Position>
+    </JumpHistory>
+    <RunParams>
+      <FormatVersion Value="2"/>
+      <Modes ActiveMode=""/>
+    </RunParams>
+  </ProjectSession>
+</CONFIG>

@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <ProjectSession>
+    <PathDelim Value="\"/>
+    <Version Value="12"/>
+    <BuildModes Active="Default"/>
+    <Units>
+      <Unit>
+        <Filename Value="databasetui.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="DatabaseTUI"/>
+        <TopLine Value="213"/>
+        <CursorPos Y="215"/>
+        <UsageCount Value="28"/>
+        <Loaded Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="adventure.pas"/>
+        <UnitName Value="AdventureEngine"/>
+        <IsVisibleTab Value="True"/>
+        <EditorIndex Value="1"/>
+        <TopLine Value="872"/>
+        <CursorPos X="5" Y="902"/>
+        <UsageCount Value="14"/>
+        <Loaded Value="True"/>
+      </Unit>
+    </Units>
+    <JumpHistory HistoryIndex="29">
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="303" Column="83" TopLine="288"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="962" Column="43" TopLine="933"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="422" Column="84" TopLine="410"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="962" Column="43" TopLine="933"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="433" Column="11" TopLine="419"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="466" Column="5" TopLine="437"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="590" Column="17" TopLine="575"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="79" TopLine="61"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="91" Column="118" TopLine="66"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="1069" Column="5" TopLine="1040"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="894" Column="5" TopLine="852"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="81" Column="13" TopLine="66"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="77" Column="3" TopLine="62"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="81" Column="57" TopLine="67"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="79" TopLine="66"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="866" Column="5" TopLine="837"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="650" Column="89" TopLine="629"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="647" Column="16" TopLine="720"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="658" Column="40" TopLine="669"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="455" Column="40" TopLine="443"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="496" Column="54" TopLine="485"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="547" Column="26" TopLine="523"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="568" Column="48" TopLine="543"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="73" Column="40" TopLine="72"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="132" Column="46" TopLine="120"/>
+      </Position>
+      <Position>
+        <Filename Value="adventure.pas"/>
+        <Caret Line="12" Column="48"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="71" Column="7" TopLine="52"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="496" Column="5" TopLine="467"/>
+      </Position>
+      <Position>
+        <Filename Value="databasetui.pas"/>
+        <Caret Line="908" Column="16" TopLine="883"/>
+      </Position>
+      <Position>
+        <Filename Value="adventure.pas"/>
+        <Caret Line="131" Column="7" TopLine="164"/>
+      </Position>
+    </JumpHistory>
+    <RunParams>
+      <FormatVersion Value="2"/>
+      <Modes ActiveMode=""/>
+    </RunParams>
+  </ProjectSession>
+</CONFIG>

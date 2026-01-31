@@ -18,7 +18,7 @@ DOS_FLAGS = -Twin16 -WD
 DOS32_FLAGS = -Tgo32v2
 WIN32_FLAGS = -Twin32
 
-.PHONY: all clean native dos dos32 win32 release
+.PHONY: all clean native dos dos32 win32 release editors editor-tv
 
 all: native
 
@@ -34,6 +34,15 @@ native: $(BINDIR)
 # Converter tool
 converter: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/converter tools/converter.pas
+
+# Turbo Vision editor (for game creators, not part of player distribution)
+editor-tv: $(BINDIR)
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/editor-tv editor-tv.pas
+
+# Build both editors
+editors: $(BINDIR)
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/editor editor.pas
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/editor-tv editor-tv.pas
 
 # DOS 16-bit (requires DOS target support in FPC)
 dos: $(BINDIR)

@@ -1,0 +1,206 @@
+program mansion;
+
+uses
+  SysUtils;
+
+const
+  MANSION_MAGIC = 'VMMM';
+  ROOM_FILE = 'ROOMS.DAT';
+
+type
+  TGameHeader = record
+    magic: array[1..4] of char;
+    version: byte;
+    totalRooms: word;
+    startRoomID: shortint;
+  end;
+
+type
+  TRoomFlags = (rfLit = 0, rfSafe = 1, rfDeadly = 2, rfQuiet = 3, rfDark = 4);
+  { Room structure }
+  TRoom = record
+    name: string[12];
+    description: string[80];
+    { Directions }
+    north, south, east, west, up, down: shortint;
+    flags: byte;
+    tags: array[1..3] of string[10];
+    decorations, npc, obj, triggers: array[1..3] of shortint;
+  end;
+
+var
+  gameFile: file;
+  header: TGameHeader;
+  room: TRoom;
+
+{ Initialize header }
+procedure WriteHeader;
+begin
+  Assign(gameFile, ROOM_FILE);
+  Rewrite(gameFile, 1);
+
+  Move(MANSION_MAGIC, header.magic, 4);
+  header.version := 1;
+  header.totalRooms := 0;
+  header.startRoomID := 1;
+
+  BlockWrite(gameFile, header, SizeOf(TGameHeader));
+  Close(gameFile);
+end;
+
+{ Verify file exists and it is valid }
+function FileExistsAndValid: boolean;
+var
+  f: file;
+  tempHeader: TGameHeader;
+begin
+  FileExistsAndValid := false;
+
+  Assign(f, ROOM_FILE);
+  {$I-}
+  Reset(f, 1);
+  {$I+}
+
+  if IOResult = 0 then
+  begin
+    BlockRead(f, tempHeader, SizeOf(TGameHeader));
+    Close(f);
+
+    { Copy to global header if valid }
+    if tempHeader.magic = MANSION_MAGIC then
+    begin
+      header := tempHeader;
+      FileExistsAndValid := true;
+    end;
+  end;
+end;
+
+{ Identify if files exist }
+procedure InitializeGameFile;
+begin
+  if not FileExistsAndValid then
+  begin
+    WriteLn('Creating game file');
+    WriteHeader;
+    WriteLn('Finished creating ',ROOM_FILE);
+  end
+  else
+  begin
+    WriteLn('Found valid ',ROOM_FILE,' file');
+    WriteLn('Loaded ', header.totalRooms, ' rooms.');
+  end;
+end;
+
+{ Add a new room }
+procedure AddRoom;
+var
+  count: word;
+  offset: longint;
+  tagInput, input: string;
+  i: integer;
+begin
+  writeln('=== Add New Room ===');
+
+  { Get input }
+  write('Name: ');
+  readln(room.name);
+
+  write('Description: ');
+  readln(room.description);
+
+  write('North: ');
+  readln(input);
+  if input = '' then
+    room.north := -1
+  else
+    room.north := StrToInt(input);
+
+  write('South: ');
+  readln(input);
+  if input = '' then
+    room.south := -1
+  else
+    room.south := StrToInt(input);
+
+  write('East: ');
+  readln(input);
+  if input = '' then
+    room.east := -1
+  else
+    room.east := StrToInt(input);
+  readln(room.east);
+
+  write('West: ');
+  readln(input);
+  if input = '' then
+    room.west := -1
+  else
+    room.west := StrToInt(input);
+
+  write('Up: ');
+  readln(input);
+  if input = '' then
+    room.up := -1
+  else
+    room.up := StrToInt(input);
+
+  write('Down: ');
+  readln(input);
+  if input = '' then
+    room.down := -1
+  else
+    room.down := StrToInt(input);
+
+  { Get tags - up to 3 }
+  writeln('Enter tags (max 3, max 10 chars each):');
+  i := 1;
+  repeat
+    write('Tag ', i, ' (or press Enter to skip): ');
+    readln(tagInput);
+
+    if tagInput <> '' then
+    begin
+      room.tags[i] := tagInput;
+      i := i + 1;
+    end
+    else
+      break;  { Stop if empty input }
+
+      until i > 3;
+
+      { Fill remaining slots with empty strings }
+      while i <= 3 do
+      begin
+        room.tags[i] := '';
+        i := i + 1;
+      end;
+end;
+
+{ Main Game Loop }
+procedure MainGameLoop;
+var choice: string;
+begin
+  repeat
+    WriteLn;
+    WriteLn('1) Add Room');
+    WriteLn('2) Check Rooms');
+    WriteLn('3) Quit Program');
+    WriteLn('Option: ');
+    ReadLn(choice);
+
+    case choice of
+      '1': AddRoom;
+      '3': WriteLn('Exiting');
+    else
+      WriteLn('Invalid option');
+    end;
+  until choice = '3';
+end;
+
+begin
+  InitializeGameFile;
+  WriteLn('Welcome to Mansion');
+  WriteLn('====================');
+  MainGameLoop;
+end.
+

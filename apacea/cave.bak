@@ -1,0 +1,20 @@
+program adv;
+
+uses roomunit;
+
+var
+  r : Room;
+
+begin
+  r := Room.Create;
+  r.Name := 'Troll Room';
+  r.Description := 'A messy room that smells';
+  r.N := -1;
+  r.S := -1;
+  r.E := -1;
+  r.W := -1;
+  r.U := -1;
+  r.D := -1;
+  WriteLn('You are in the ', r.GetDescription);
+  Readln;
+end.

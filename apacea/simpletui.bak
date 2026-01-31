@@ -1,0 +1,199 @@
+program SimpleTUI;
+
+{$mode objfpc}{$H+}
+
+uses
+  Objects, Drivers, Views, Menus, App, Dialogs, MsgBox, SysUtils;
+
+type
+  TSimpleApp = object(TApplication)
+    procedure InitStatusLine; virtual;
+    procedure InitMenuBar; virtual;
+    procedure HandleEvent(var Event: TEvent); virtual;
+  end;
+
+const
+  cmFileOps = 101;
+  cmFormRoom = 102;
+
+{ Your custom procedures }
+procedure FileOperations;
+var
+  filename: string;
+  F: Text;  { Changed from TextFile to Text }
+begin
+  filename := 'test_output.txt';
+  try
+    Assign(F, filename);  { Use Assign instead of AssignFile }
+    Rewrite(F);
+    writeln(F, 'Hello from Free Vision TUI!');
+    writeln(F, 'Generated at: ' + DateTimeToStr(Now));
+    Close(F);  { Use Close instead of CloseFile }
+    MessageBox('File "' + filename + '" created successfully!', nil, mfInformation + mfOKButton);
+  except
+    on E: Exception do
+      MessageBox('Error creating file: ' + E.Message, nil, mfError + mfOKButton);
+  end;
+end;
+
+procedure CreateRoomFile;
+var
+  Dialog: PDialog;
+  R: TRect;
+  RoomNameField, DescriptionField, NorthField, SouthField, EastField, WestField, UpField, DownField: PInputLine;
+  roomName, descriptionName, northID, southID, eastID, westID, upID, downID: string;
+  result: Word;
+begin
+  roomName := '';
+  descriptionName := '';
+
+  R.Assign(5, 4, 75, 30);
+  Dialog := New(PDialog, Init(R, 'Room Information'));
+
+  with Dialog^ do
+  begin
+    { Room Name and field }
+    R.Assign(3, 2, 15, 3);
+    Insert(New(PStaticText, Init(R, 'Room Name:')));
+    R.Assign(16, 2, 55, 3);
+    RoomNameField := New(PInputLine, Init(R, 50));
+    Insert(RoomNameField);
+
+    { Description and field }
+    R.Assign(3, 4, 15, 5);
+    Insert(New(PStaticText, Init(R, 'Description:')));
+    R.Assign(16, 4, 55, 5);
+    DescriptionField := New(PInputLine, Init(R, 200));
+    Insert(DescriptionField);
+
+    { North and Field }
+    R.Assign(3, 6, 15, 7);
+    Insert(New(PStaticText, Init(R, 'North:')));
+    R.Assign(16, 6, 55, 7);
+    NorthField := New(PInputLine, Init(R, 3));
+    Insert(NorthField);
+
+    { South and Field }
+    R.Assign(3, 8, 15, 9);
+    Insert(New(PStaticText, Init(R, 'South:')));
+    R.Assign(16, 8, 55, 9);
+    SouthField := New(PInputLine, Init(R, 3));
+    Insert(SouthField);
+
+    { East and Field }
+    R.Assign(3, 10, 15, 11);
+    Insert(New(PStaticText, Init(R, 'East:')));
+    R.Assign(16, 10, 55, 11);
+    EastField := New(PInputLine, Init(R, 3));
+    Insert(EastField);
+
+    { West and Field }
+    R.Assign(3, 12, 15, 13);
+    Insert(New(PStaticText, Init(R, 'West:')));
+    R.Assign(16, 12, 55, 13);
+    WestField := New(PInputLine, Init(R, 3));
+    Insert(WestField);
+
+    { Up and Field }
+    R.Assign(3, 14, 15, 15);
+    Insert(New(PStaticText, Init(R, 'Up:')));
+    R.Assign(16, 14, 55, 15);
+    UpField := New(PInputLine, Init(R, 3));
+    Insert(UpField);
+
+    { Down and Field }
+    R.Assign(3, 16, 15, 17);
+    Insert(New(PStaticText, Init(R, 'Down:')));
+    R.Assign(16, 16, 55, 17);
+    DownField := New(PInputLine, Init(R, 3));
+    Insert(DownField);
+
+    { Buttons }
+    R.Assign(15, 8, 25, 10);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(30, 8, 40, 10);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  result := Desktop^.ExecView(Dialog);
+
+  if result = cmOK then
+  begin
+    { Access the data directly as a Pascal string }
+    if RoomNameField^.Data <> nil then
+      roomName := PShortString(RoomNameField^.Data)^;
+    if DescriptionField^.Data <> nil then
+      descriptionName := PShortString(DescriptionField^.Data)^;
+    if NorthField^.Data <> nil then
+      northID := PShortString(NorthField^.Data)^;
+    if NorthField^.Data <> nil then
+      southID := PShortString(SouthField^.Data)^;
+    if NorthField^.Data <> nil then
+      eastID := PShortString(EastField^.Data)^;
+    if NorthField^.Data <> nil then
+      westID := PShortString(WestField^.Data)^;
+    if NorthField^.Data <> nil then
+      upID := PShortString(UpField^.Data)^;
+    if NorthField^.Data <> nil then
+      downID := PShortString(DownField^.Data)^;
+
+    MessageBox('Room Name: ' + roomName + #13 + 'Description: ' + descriptionName + #13 +
+               'North: ' + northID + #13 + 'South: ' + southID + #13 + 'East: ' + eastID + #13 +
+               'West: ' + westID + #13 + 'Up: ' + upID + #13 + 'Down: ' + #13 + downID,
+               nil, mfInformation + mfOKButton);
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+procedure TSimpleApp.InitStatusLine;
+var
+  R: TRect;
+begin
+  GetExtent(R);
+  R.A.Y := R.B.Y - 1;
+  StatusLine := New(PStatusLine, Init(R,
+    NewStatusDef(0, $FFFF,
+      NewStatusKey('~Alt+X~ Exit', kbAltX, cmQuit, nil), nil)));
+end;
+
+procedure TSimpleApp.InitMenuBar;
+var
+  R: TRect;
+begin
+  GetExtent(R);
+  R.B.Y := R.A.Y + 1;
+  MenuBar := New(PMenuBar, Init(R, NewMenu(
+    NewSubMenu('~A~ctions', hcNoContext, NewMenu(
+      NewItem('~F~ile Operations', '', kbNoKey, cmFileOps, hcNoContext,
+      NewItem('~Room Form', '', kbNoKey, cmFormRoom, hcNoContext,
+      NewLine(
+      NewItem('~Q~uit', 'Alt+X', kbAltX, cmQuit, hcNoContext,
+      nil))))),
+    nil))));
+end;
+
+procedure TSimpleApp.HandleEvent(var Event: TEvent);
+begin
+  inherited HandleEvent(Event);
+  if Event.What = evCommand then
+  begin
+    case Event.Command of
+      cmFileOps:   FileOperations;
+      cmFormRoom:  CreateRoomFile;
+    else
+      Exit;
+    end;
+    ClearEvent(Event);
+  end;
+end;
+
+var
+  MyApplication: TSimpleApp;
+
+begin
+  MyApplication.Init;
+  MyApplication.Run;
+  MyApplication.Done;
+end.

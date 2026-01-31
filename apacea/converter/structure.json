@@ -1,0 +1,97 @@
+{
+    "room_id": 4,
+    "rooms": [
+        {
+            "id": 1,
+            "name": "Second Room",
+            "description": "This is the main room",
+            "exits": {
+                "north": -1,
+                "south": -1,
+                "east": -1,
+                "west": -1,
+                "up": -1,
+                "down": -1
+            },
+            "lit": true,
+            "trigger": -1,
+            "npc": -1,
+            "visited": false,
+            "tags": [
+                "safe_zone"
+            ],
+            "hazards": [],
+            "fixtures": [],
+            "event_flags": []
+        },
+        {
+            "id": 2,
+            "name": "Main Room",
+            "description": "This is the main room",
+            "exits": {
+                "north": -1,
+                "south": -1,
+                "east": -1,
+                "west": -1,
+                "up": -1,
+                "down": -1
+            },
+            "lit": true,
+            "trigger": -1,
+            "npc": -1,
+            "visited": false,
+            "tags": [
+                "safe_zone"
+            ],
+            "hazards": [],
+            "fixtures": [],
+            "event_flags": []
+        },
+        {
+            "id": 3,
+            "name": "Main Room",
+            "description": "This is the main room",
+            "exits": {
+                "north": -1,
+                "south": -1,
+                "east": -1,
+                "west": -1,
+                "up": -1,
+                "down": -1
+            },
+            "lit": true,
+            "trigger": -1,
+            "npc": -1,
+            "visited": false,
+            "tags": [
+                "safe_zone"
+            ],
+            "hazards": [],
+            "fixtures": [],
+            "event_flags": []
+        },
+        {
+            "id": 4,
+            "name": "Main Room",
+            "description": "This is the description of the main room",
+            "exits": {
+                "north": -1,
+                "south": -1,
+                "east": -1,
+                "west": -1,
+                "up": -1,
+                "down": -1
+            },
+            "lit": true,
+            "trigger": -1,
+            "npc": -1,
+            "visited": false,
+            "tags": [
+                "safe_zone"
+            ],
+            "hazards": [],
+            "fixtures": [],
+            "event_flags": []
+        }
+    ]
+}

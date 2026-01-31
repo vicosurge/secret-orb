@@ -1,0 +1,27 @@
+program reader
+
+var
+  BinaryFile: file of Byte;
+  Buffer: array[1..256] of Byte;
+  BytesWritten: Integer;
+  i: Integer;
+  FileName: string;
+begin
+  FileName := 'example.dat';
+  AssignFile(BinaryFile, FileName);
+
+  for i := 1 to 256 do
+    Buffer[i] := i;
+  
+  { Open the file for writing }
+  Rewrite(BinaryFile);
+
+  { Write the buffer to the binary file }
+  BlockWrite(BinaryFile, Buffer, SizeOf(Buffer), BytesWritten);
+
+  if BytesWritten <> SizeOf(Buffer) then
+    WriteLn('Error writing to file');
+
+  { Close the file }
+  CloseFile(BinaryFile);
+end
