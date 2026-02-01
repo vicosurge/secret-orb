@@ -29,6 +29,8 @@ jobs:
           mkdir -p bin
           fpc -O2 -XX -CX -Xs -Fusrc -obin/secretorb secretorb.pas
           fpc -O2 -XX -CX -Xs -Fusrc -obin/editor editor.pas
+          echo "Building Turbo Vision editor (verification only)..."
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/editor-tv editor-tv.pas
 
       - name: Package Linux build
         working-directory: pascal
@@ -137,11 +139,17 @@ jobs:
           $exitCode2 = $LASTEXITCODE
           Write-Host "Exit code: $exitCode2"
 
+          Write-Host "Compiling editor-tv.pas (verification only)..."
+          & $fpcExe -O2 -XX -CX -Xs -Fusrc -obin\editor-tv.exe editor-tv.pas
+          $exitCode3 = $LASTEXITCODE
+          Write-Host "Exit code: $exitCode3"
+
           Write-Host "Contents of bin directory:"
           Get-ChildItem -Path bin -ErrorAction SilentlyContinue | Select-Object Name, Length
 
           if ($exitCode1 -ne 0) { exit $exitCode1 }
           if ($exitCode2 -ne 0) { exit $exitCode2 }
+          if ($exitCode3 -ne 0) { exit $exitCode3 }
 
       - name: Package Windows build
         working-directory: pascal
