@@ -1,4 +1,5 @@
-{ datafile.pas - Text-based data file I/O for Secret Orb }
+{ datafile.pas - Data file I/O for Secret Orb }
+{ Supports three formats: Binary (SORB), Text (INI-style), and BPL }
 unit DataFile;
 
 {$MODE OBJFPC}
@@ -8,11 +9,18 @@ interface
 uses
   SysUtils, GameData;
 
+type
+  TSaveFormat = (sfBinary, sfText, sfBPL);
+
 function LoadWorld(const FileName: string; var W: TGameWorld): Boolean;
 function SaveWorld(const FileName: string; var W: TGameWorld): Boolean;
+function SaveWorldAs(const FileName: string; var W: TGameWorld; Format: TSaveFormat): Boolean;
 function FindRoomByID(var W: TGameWorld; ID: Word): Integer;
 
 implementation
+
+uses
+  BPLParser;
 
 function Trim(const S: string): string;
 var
@@ -97,7 +105,7 @@ end;
 
 type
   TSectionType = (secNone, secWorld, secRoom, secObject, secMob);
-  TFileFormat = (ffText, ffBinary);
+  TFileFormat = (ffText, ffBinary, ffBPL);
 
 const
   SORB_MAGIC = 'SORB';
@@ -168,8 +176,17 @@ var
   F: File;
   Magic: array[0..3] of Char;
   BytesRead: Integer;
+  Ext: string;
 begin
   Result := ffText;
+
+  { First check file extension for BPL }
+  Ext := LowerCase(ExtractFileExt(FileName));
+  if Ext = '.bpl' then
+  begin
+    Result := ffBPL;
+    Exit;
+  end;
 
   {$I-}
   Assign(F, FileName);
@@ -584,10 +601,12 @@ var
   Format: TFileFormat;
 begin
   Format := DetectFileFormat(FileName);
-  if Format = ffBinary then
-    Result := LoadWorldBinary(FileName, W)
+  case Format of
+    ffBinary: Result := LoadWorldBinary(FileName, W);
+    ffBPL:    Result := LoadWorldBPL(FileName, W);
   else
     Result := LoadWorldText(FileName, W);
+  end;
 end;
 
 function SaveWorldText(const FileName: string; var W: TGameWorld): Boolean;
@@ -670,6 +689,17 @@ function SaveWorld(const FileName: string; var W: TGameWorld): Boolean;
 begin
   { Default to binary format for space savings }
   Result := SaveWorldBinary(FileName, W);
+end;
+
+function SaveWorldAs(const FileName: string; var W: TGameWorld; Format: TSaveFormat): Boolean;
+begin
+  case Format of
+    sfBinary: Result := SaveWorldBinary(FileName, W);
+    sfText:   Result := SaveWorldText(FileName, W);
+    sfBPL:    Result := SaveWorldBPL(FileName, W);
+  else
+    Result := SaveWorldBinary(FileName, W);
+  end;
 end;
 
 end.
