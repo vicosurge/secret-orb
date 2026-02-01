@@ -9,13 +9,15 @@ uses
   GameData, DataFile;
 
 const
-  VERSION = '0.2.0-TV';
+  VERSION = '0.3.0-TV';
 
   { Command constants }
   cmNewWorld     = 100;
   cmLoadWorld    = 101;
   cmSaveWorld    = 102;
   cmSaveWorldAs  = 103;
+  cmExportBPL    = 104;
+  cmExportText   = 105;
 
   cmListRooms    = 200;
   cmAddRoom      = 201;
@@ -53,6 +55,8 @@ type
     procedure LoadWorld;
     procedure SaveWorld;
     procedure SaveWorldAs;
+    procedure ExportToBPL;
+    procedure ExportToText;
 
     { Room operations }
     procedure ListRooms;
@@ -135,8 +139,11 @@ begin
       NewItem('~S~ave', 'F2', kbF2, cmSaveWorld, hcNoContext,
       NewItem('S~a~ve As...', '', kbNoKey, cmSaveWorldAs, hcNoContext,
       NewLine(
+      NewItem('Export to ~B~PL...', '', kbNoKey, cmExportBPL, hcNoContext,
+      NewItem('Export to ~T~ext...', '', kbNoKey, cmExportText, hcNoContext,
+      NewLine(
       NewItem('E~x~it', 'Alt+X', kbAltX, cmQuit, hcNoContext,
-      nil))))))),
+      nil)))))))))),
     NewSubMenu('~R~ooms', hcNoContext, NewMenu(
       NewItem('~L~ist Rooms', '', kbNoKey, cmListRooms, hcNoContext,
       NewItem('~A~dd Room', '', kbNoKey, cmAddRoom, hcNoContext,
@@ -167,6 +174,8 @@ begin
       cmLoadWorld:     LoadWorld;
       cmSaveWorld:     SaveWorld;
       cmSaveWorldAs:   SaveWorldAs;
+      cmExportBPL:     ExportToBPL;
+      cmExportText:    ExportToText;
 
       cmListRooms:     ListRooms;
       cmAddRoom:       AddRoom;
@@ -344,6 +353,110 @@ begin
       end
       else
         MessageBox('Error saving world file!', nil, mfError + mfOKButton);
+    end;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+procedure TEditorApp.ExportToBPL;
+var
+  Dialog: PDialog;
+  R: TRect;
+  InputField: PInputLine;
+  Control: Word;
+  Filename: string;
+  DefaultFile: string;
+begin
+  R.Assign(15, 8, 65, 14);
+  Dialog := New(PDialog, Init(R, 'Export to BPL'));
+
+  with Dialog^ do
+  begin
+    R.Assign(3, 2, 47, 3);
+    Insert(New(PStaticText, Init(R, 'Filename (BPL format):')));
+
+    R.Assign(3, 3, 47, 4);
+    InputField := New(PInputLine, Init(R, 255));
+    if CurrentFile <> '' then
+      DefaultFile := ChangeFileExt(CurrentFile, '.bpl')
+    else
+      DefaultFile := 'world.bpl';
+    InputField^.SetData(DefaultFile);
+    Insert(InputField);
+
+    R.Assign(10, 5, 20, 7);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(25, 5, 35, 7);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+
+  if Control = cmOK then
+  begin
+    Filename := '';
+    InputField^.GetData(Filename);
+
+    if Filename <> '' then
+    begin
+      if DataFile.SaveWorldAs(Filename, World, sfBPL) then
+        MessageBox('Exported to BPL successfully!', nil, mfInformation + mfOKButton)
+      else
+        MessageBox('Error exporting to BPL!', nil, mfError + mfOKButton);
+    end;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+procedure TEditorApp.ExportToText;
+var
+  Dialog: PDialog;
+  R: TRect;
+  InputField: PInputLine;
+  Control: Word;
+  Filename: string;
+  DefaultFile: string;
+begin
+  R.Assign(15, 8, 65, 14);
+  Dialog := New(PDialog, Init(R, 'Export to Text'));
+
+  with Dialog^ do
+  begin
+    R.Assign(3, 2, 47, 3);
+    Insert(New(PStaticText, Init(R, 'Filename (Text format):')));
+
+    R.Assign(3, 3, 47, 4);
+    InputField := New(PInputLine, Init(R, 255));
+    if CurrentFile <> '' then
+      DefaultFile := ChangeFileExt(CurrentFile, '.txt')
+    else
+      DefaultFile := 'world.txt';
+    InputField^.SetData(DefaultFile);
+    Insert(InputField);
+
+    R.Assign(10, 5, 20, 7);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(25, 5, 35, 7);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+
+  if Control = cmOK then
+  begin
+    Filename := '';
+    InputField^.GetData(Filename);
+
+    if Filename <> '' then
+    begin
+      if DataFile.SaveWorldAs(Filename, World, sfText) then
+        MessageBox('Exported to text format successfully!', nil, mfInformation + mfOKButton)
+      else
+        MessageBox('Error exporting to text!', nil, mfError + mfOKButton);
     end;
   end;
 
@@ -1550,6 +1663,8 @@ begin
                #13 +
                'A professional world editor for' + #13 +
                'creating Secret Orb adventure games.' + #13 +
+               #13 +
+               'Supports Binary, Text, and BPL formats.' + #13 +
                #13 +
                'Based on Free Pascal Vision';
 
