@@ -20,7 +20,7 @@ function FindRoomByID(var W: TGameWorld; ID: Word): Integer;
 implementation
 
 uses
-  BPLParser;
+  BPLPars;
 
 function Trim(const S: string): string;
 var
