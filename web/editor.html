@@ -1,0 +1,1693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Secret Orb World Editor</title>
+<style>
+  :root {
+    --bg: #12100e;
+    --panel: #1b1815;
+    --panel-2: #221e1a;
+    --line: #3a332c;
+    --text: #e8e0d4;
+    --dim: #a1968a;
+    --amber: #f0b429;
+    --green: #7bc47f;
+    --red: #e06c5a;
+    --blue: #6fb3d2;
+    --focus: #f0b429;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f1ea; --panel: #fffdf8; --panel-2: #f0ebe1; --line: #d5ccbd;
+      --text: #241f1a; --dim: #6b6055; --amber: #a86e00; --green: #2f7a3a;
+      --red: #b03a26; --blue: #1f6f96;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 600; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  a { color: var(--blue); }
+
+  /* ---- Chrome ---- */
+  header {
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 12px;
+    align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 { font-size: 15px; letter-spacing: .04em; }
+  .brand .orb { color: var(--amber); }
+  .brand .sub { color: var(--dim); font-size: 12px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  button {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    padding: 5px 11px; border-radius: 4px; cursor: pointer;
+  }
+  button:hover { border-color: var(--amber); }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--focus); outline-offset: 1px;
+  }
+  button.primary { background: var(--amber); border-color: var(--amber); color: #1b1408; font-weight: 600; }
+  button.danger:hover { border-color: var(--red); color: var(--red); }
+  button[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
+
+  input[type=text], input[type=number], textarea, select {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+    padding: 5px 8px; width: 100%;
+  }
+  textarea { font-family: var(--mono); font-size: 13px; resize: vertical; min-height: 68px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+  .field { margin-bottom: 11px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > .field { flex: 1 1 130px; margin-bottom: 11px; }
+  .counter { float: right; font-variant-numeric: tabular-nums; }
+  .counter.over { color: var(--red); font-weight: 600; }
+
+  /* ---- World bar ---- */
+  .worldbar {
+    display: flex; flex-wrap: wrap; gap: 10px; padding: 9px 16px;
+    background: var(--panel-2); border-bottom: 1px solid var(--line); align-items: flex-end;
+  }
+  .worldbar .field { margin: 0; }
+  .worldbar .field.wide { flex: 2 1 220px; }
+  .worldbar .field.narrow { flex: 0 0 96px; }
+  .worldbar .stat { color: var(--dim); font-size: 12px; margin-left: auto; align-self: center; text-align: right; }
+  .worldbar .stat b { color: var(--amber); font-variant-numeric: tabular-nums; }
+
+  /* ---- Tabs ---- */
+  nav { display: flex; gap: 2px; padding: 0 12px; background: var(--panel);
+        border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    border-radius: 0; padding: 9px 13px; color: var(--dim); white-space: nowrap;
+  }
+  nav button:hover { color: var(--text); }
+  nav button[aria-selected="true"] { color: var(--amber); border-bottom-color: var(--amber); }
+  nav .badge {
+    display: inline-block; min-width: 17px; margin-left: 6px; padding: 0 5px;
+    background: var(--panel-2); border-radius: 9px; font-size: 11px;
+    font-variant-numeric: tabular-nums; color: var(--dim);
+  }
+  nav .badge.warn { background: var(--red); color: #fff; }
+
+  main { padding: 14px 16px 40px; max-width: 1500px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ---- List + form split ---- */
+  .split { display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+
+  .listbox { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: hidden; }
+  .listbox header {
+    background: var(--panel-2); padding: 7px 10px; font-size: 12px; color: var(--dim);
+    border: none; border-bottom: 1px solid var(--line); display: flex;
+    justify-content: space-between; align-items: center;
+  }
+  .listbox ul { list-style: none; margin: 0; padding: 0; max-height: 62vh; overflow-y: auto; }
+  .listbox li {
+    padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: flex; gap: 8px; align-items: baseline;
+  }
+  .listbox li:last-child { border-bottom: none; }
+  .listbox li:hover { background: var(--panel-2); }
+  .listbox li[aria-current="true"] { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--amber); }
+  .listbox li .id { font-family: var(--mono); font-size: 12px; color: var(--amber); min-width: 2.2em; }
+  .listbox li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .listbox li .tag { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+  .empty { padding: 22px 12px; color: var(--dim); text-align: center; font-size: 13px; }
+
+  .form { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 14px; }
+  .form h3 { font-size: 13px; color: var(--dim); margin-bottom: 12px;
+             text-transform: uppercase; letter-spacing: .06em; }
+  .exits { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  .flags { display: flex; flex-wrap: wrap; gap: 14px; }
+  .flags label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; margin: 0; }
+  .flags input { width: auto; }
+  .formfoot { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line);
+              display: flex; gap: 8px; align-items: center; }
+  .formfoot .spacer { flex: 1; }
+  .hint { color: var(--dim); font-size: 12px; }
+
+  /* ---- Map ---- */
+  .mapwrap { border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+             overflow: auto; max-height: 74vh; }
+  .mapwrap svg { display: block; }
+  .node rect { fill: var(--panel-2); stroke: var(--line); stroke-width: 1.5; }
+  .node:hover rect { stroke: var(--amber); }
+  .node.sel rect { stroke: var(--amber); stroke-width: 2.5; }
+  .node.start rect { fill: color-mix(in srgb, var(--amber) 16%, var(--panel-2)); }
+  .node.win rect { stroke: var(--green); }
+  .node.orphan rect { stroke: var(--red); stroke-dasharray: 4 3; }
+  .node text { font-family: var(--mono); font-size: 11px; fill: var(--text); }
+  .node text.sub { fill: var(--dim); font-size: 10px; }
+  .link { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  .link.oneway { stroke: var(--blue); stroke-dasharray: 5 3; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 9px 2px; color: var(--dim); font-size: 12px; }
+  .legend i { display: inline-block; width: 11px; height: 11px; border: 2px solid; margin-right: 5px;
+              vertical-align: -1px; border-radius: 2px; }
+
+  /* ---- Validation ---- */
+  .issue { border: 1px solid var(--line); border-left-width: 3px; border-radius: 5px;
+           padding: 9px 12px; margin-bottom: 8px; background: var(--panel); }
+  .issue.error { border-left-color: var(--red); }
+  .issue.warn { border-left-color: var(--amber); }
+  .issue .what { font-weight: 600; }
+  .issue .where { color: var(--dim); font-size: 12px; font-family: var(--mono); }
+  .allclear { color: var(--green); padding: 18px 2px; }
+
+  /* ---- Playtest ---- */
+  .play { display: grid; grid-template-columns: 1fr minmax(190px, 260px); gap: 16px; align-items: start; }
+  @media (max-width: 820px) { .play { grid-template-columns: 1fr; } }
+  .screen {
+    background: #0b0a08; color: #cfc6b6; border: 1px solid var(--line); border-radius: 6px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.45;
+    padding: 12px; height: 62vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .screen .rm { color: var(--amber); font-weight: 700; }
+  .screen .ex { color: var(--blue); }
+  .screen .ob { color: #d9a7e0; }
+  .screen .mb { color: var(--red); }
+  .screen .msg { color: var(--green); }
+  .screen .cmd { color: #8d8272; }
+  .screen .win { color: var(--amber); font-weight: 700; }
+  .cmdline { display: flex; gap: 8px; margin-top: 9px; }
+  .cmdline input { font-family: var(--mono); }
+  .sidecard { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 11px; }
+  .sidecard h3 { font-size: 12px; color: var(--dim); text-transform: uppercase;
+                 letter-spacing: .06em; margin-bottom: 8px; }
+  .kv { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; }
+  .kv span:last-child { font-family: var(--mono); color: var(--amber); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    background: var(--panel); border: 1px solid var(--amber); color: var(--text);
+    padding: 9px 16px; border-radius: 5px; z-index: 50; box-shadow: 0 6px 22px rgba(0,0,0,.4);
+    max-width: 90vw;
+  }
+  .toast.bad { border-color: var(--red); }
+  .menu { position: relative; display: inline-block; }
+  .menu .items {
+    position: absolute; right: 0; top: calc(100% + 4px); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 5px; min-width: 232px; z-index: 30;
+    box-shadow: 0 6px 22px rgba(0,0,0,.35); padding: 4px;
+  }
+  .menu .items button {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    border-radius: 4px; padding: 7px 9px;
+  }
+  .menu .items button:hover { background: var(--panel-2); }
+  .menu .items .fmt { display: block; font-size: 11px; color: var(--dim); font-family: var(--mono); }
+  [hidden] { display: none !important; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>Secret <span class="orb">Orb</span> World Editor</h1>
+    <span class="sub">writes binary v2, text and BPL</span>
+  </div>
+  <div class="actions">
+    <button id="btnNew">New</button>
+    <button id="btnOpen">Open&hellip;</button>
+    <input type="file" id="fileInput" class="sr" accept=".dat,.txt,.bpl,.sorb,*">
+    <div class="menu">
+      <button id="btnSave" class="primary" aria-expanded="false">Save as &#9662;</button>
+      <div class="items" id="saveMenu" hidden>
+        <button data-fmt="bin">Binary world<span class="fmt">world.dat &mdash; SORB v2, what the game loads by default</span></button>
+        <button data-fmt="txt">Text world<span class="fmt">world.txt &mdash; INI style, hand-editable</span></button>
+        <button data-fmt="bpl">BPL world<span class="fmt">world.bpl &mdash; bracket language, revision 2</span></button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="worldbar">
+  <div class="field wide">
+    <label for="wTitle">World title <span class="counter" id="cTitle"></span></label>
+    <input type="text" id="wTitle" maxlength="40">
+  </div>
+  <div class="field narrow">
+    <label for="wStart">Start room</label>
+    <input type="number" id="wStart" min="0" step="1">
+  </div>
+  <div class="field narrow">
+    <label for="wWinRoom">Win room</label>
+    <input type="number" id="wWinRoom" min="0" step="1">
+  </div>
+  <div class="field narrow">
+    <label for="wWinObj">Win object</label>
+    <input type="number" id="wWinObj" min="0" step="1">
+  </div>
+  <div class="stat">
+    Max score <b id="sScore">0</b> &nbsp;&middot;&nbsp;
+    <span id="sCounts">0 rooms, 0 objects, 0 mobs</span>
+  </div>
+</div>
+
+<nav>
+  <button data-tab="rooms" aria-selected="true">Rooms <span class="badge" id="bRooms">0</span></button>
+  <button data-tab="objects" aria-selected="false">Objects <span class="badge" id="bObjects">0</span></button>
+  <button data-tab="mobs" aria-selected="false">Mobs <span class="badge" id="bMobs">0</span></button>
+  <button data-tab="map" aria-selected="false">Map</button>
+  <button data-tab="check" aria-selected="false">Check <span class="badge" id="bIssues">0</span></button>
+  <button data-tab="play" aria-selected="false">Playtest</button>
+</nav>
+
+<main>
+  <!-- ROOMS -->
+  <section class="panel active" id="panel-rooms">
+    <div class="split">
+      <div class="listbox">
+        <header><span>Rooms</span><button id="addRoom">+ Add</button></header>
+        <ul id="listRooms"></ul>
+      </div>
+      <div class="form" id="formRoom"></div>
+    </div>
+  </section>
+
+  <!-- OBJECTS -->
+  <section class="panel" id="panel-objects">
+    <div class="split">
+      <div class="listbox">
+        <header><span>Objects</span><button id="addObject">+ Add</button></header>
+        <ul id="listObjects"></ul>
+      </div>
+      <div class="form" id="formObject"></div>
+    </div>
+  </section>
+
+  <!-- MOBS -->
+  <section class="panel" id="panel-mobs">
+    <div class="split">
+      <div class="listbox">
+        <header><span>Mobs</span><button id="addMob">+ Add</button></header>
+        <ul id="listMobs"></ul>
+      </div>
+      <div class="form" id="formMob"></div>
+    </div>
+  </section>
+
+  <!-- MAP -->
+  <section class="panel" id="panel-map">
+    <div class="legend">
+      <span><i style="border-color:var(--amber)"></i>start room</span>
+      <span><i style="border-color:var(--green)"></i>win room</span>
+      <span><i style="border-color:var(--red);border-style:dashed"></i>unreachable</span>
+      <span><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="link"/></svg> two-way</span>
+      <span><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" class="link oneway"/></svg> one-way</span>
+      <span>&#8593;&#8595; vertical exits shown on the room</span>
+    </div>
+    <div class="mapwrap" id="mapWrap"></div>
+    <p class="hint" style="margin-top:9px">
+      Laid out automatically from the compass exits, starting at the start room. Click a room to edit it.
+    </p>
+  </section>
+
+  <!-- CHECK -->
+  <section class="panel" id="panel-check">
+    <div id="issues"></div>
+  </section>
+
+  <!-- PLAY -->
+  <section class="panel" id="panel-play">
+    <div class="play">
+      <div>
+        <div class="screen" id="screen"></div>
+        <form class="cmdline" id="cmdForm">
+          <input type="text" id="cmdInput" placeholder="Type a command, e.g. look, take lamp, north" autocomplete="off">
+          <button class="primary" type="submit">Enter</button>
+          <button type="button" id="btnRestart">Restart</button>
+        </form>
+      </div>
+      <div>
+        <div class="sidecard">
+          <h3>Status</h3>
+          <div class="kv"><span>Room</span><span id="pRoom">&mdash;</span></div>
+          <div class="kv"><span>Score</span><span id="pScore">0</span></div>
+          <div class="kv"><span>Turns</span><span id="pTurns">0</span></div>
+          <div class="kv"><span>Carrying</span><span id="pInv">0/8</span></div>
+        </div>
+        <div class="sidecard" style="margin-top:12px">
+          <h3>Commands</h3>
+          <p class="hint" style="margin:0">
+            N S E W U D &middot; LOOK &middot; EXAMINE &middot; TAKE &middot; DROP &middot; USE &middot;
+            OPEN &middot; READ &middot; TALK &middot; INVENTORY &middot; SCORE
+          </p>
+          <p class="hint" style="margin:9px 0 0">
+            Mirrors the Pascal engine, including first-visit and first-take scoring
+            and the win condition. SAVE and LOAD are game-only.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+/* ============================================================================
+   Limits, mirrored from pascal/src/gamedata.pas
+   ========================================================================== */
+const LIM = {
+  ROOMS: 256, OBJECTS: 128, MOBS: 64, INVENTORY: 8,
+  TITLE: 40, ROOM_NAME: 40, ROOM_DESC: 255,
+  OBJ_NAME: 30, OBJ_DESC: 100, USE_TEXT: 100,
+  MOB_NAME: 30, MOB_DESC: 100, DIALOGUE: 200
+};
+const DIRS = ["north", "south", "east", "west", "up", "down"];
+const DIR_LABEL = { north: "North", south: "South", east: "East", west: "West", up: "Up", down: "Down" };
+const OPPOSITE = { north: "south", south: "north", east: "west", west: "east", up: "down", down: "up" };
+const FLAGS = ["pickup", "use", "open", "read"];
+
+/* ============================================================================
+   Model
+   ========================================================================== */
+let world = blankWorld();
+let sel = { rooms: null, objects: null, mobs: null };
+
+function blankWorld() {
+  return { title: "Untitled", startRoom: 1, winRoomID: 0, winObjectID: 0, rooms: [], objects: [], mobs: [] };
+}
+function newRoom(id) {
+  return { id, name: "", desc: "", exits: { north: 0, south: 0, east: 0, west: 0, up: 0, down: 0 }, points: 0 };
+}
+function newObject(id) {
+  return { id, name: "", desc: "", roomID: 0, carriedBy: 0,
+           flags: { pickup: true, use: false, open: false, read: false }, useText: "", points: 0 };
+}
+function newMob(id) { return { id, name: "", desc: "", roomID: 0, dialogue: "" }; }
+
+function nextId(list) {
+  let n = 1;
+  const used = new Set(list.map(e => e.id));
+  while (used.has(n)) n++;
+  return n;
+}
+const roomById = id => world.rooms.find(r => r.id === id) || null;
+const objectById = id => world.objects.find(o => o.id === id) || null;
+const mobById = id => world.mobs.find(m => m.id === id) || null;
+const maxScore = () =>
+  world.rooms.reduce((s, r) => s + (r.points | 0), 0) +
+  world.objects.reduce((s, o) => s + (o.points | 0), 0);
+
+/* ============================================================================
+   Byte helpers. Pascal short strings are a length byte followed by a fixed
+   number of character bytes, so every field is written at a known offset.
+   ========================================================================== */
+function latin1(str) {
+  const out = [];
+  for (const ch of String(str)) {
+    const c = ch.codePointAt(0);
+    out.push(c <= 0xff ? c : 63); // '?' for anything outside a single byte
+  }
+  return out;
+}
+function writeShortString(view, off, str, maxLen) {
+  const bytes = latin1(str).slice(0, maxLen);
+  view.setUint8(off, bytes.length);
+  for (let i = 0; i < bytes.length; i++) view.setUint8(off + 1 + i, bytes[i]);
+  for (let i = bytes.length; i < maxLen; i++) view.setUint8(off + 1 + i, 0);
+  return off + 1 + maxLen;
+}
+function readShortString(view, off, maxLen) {
+  const len = Math.min(view.getUint8(off), maxLen);
+  let s = "";
+  for (let i = 0; i < len; i++) s += String.fromCharCode(view.getUint8(off + 1 + i));
+  return s;
+}
+const flagsToByte = f => (f.pickup ? 1 : 0) | (f.use ? 2 : 0) | (f.open ? 4 : 0) | (f.read ? 8 : 0);
+const byteToFlags = b => ({ pickup: !!(b & 1), use: !!(b & 2), open: !!(b & 4), read: !!(b & 8) });
+
+/* ---- Binary SORB version 2 --------------------------------------------
+   Record sizes and field offsets are taken from the packed records in
+   pascal/src/datafile.pas: header 69, room 315, object 244, mob 341 bytes. */
+const BIN = { HEADER: 69, ROOM: 315, OBJECT: 244, MOB: 341 };
+
+function writeBinary() {
+  const rooms = world.rooms, objects = world.objects, mobs = world.mobs;
+  const total = BIN.HEADER + rooms.length * BIN.ROOM + objects.length * BIN.OBJECT + mobs.length * BIN.MOB;
+  const buf = new ArrayBuffer(total);
+  const v = new DataView(buf);
+  let p = 0;
+
+  // Header
+  "SORB".split("").forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
+  v.setUint16(4, 2, true);                       // version
+  v.setUint16(6, rooms.length, true);
+  v.setUint16(8, objects.length, true);
+  v.setUint16(10, mobs.length, true);
+  v.setUint16(12, world.startRoom | 0, true);
+  writeShortString(v, 14, world.title, LIM.TITLE);   // 14..54
+  v.setUint16(55, world.winRoomID | 0, true);
+  v.setUint16(57, world.winObjectID | 0, true);
+  v.setUint16(59, maxScore() & 0xffff, true);
+  for (let i = 61; i < 69; i++) v.setUint8(i, 0);   // reserved
+  p = BIN.HEADER;
+
+  for (const r of rooms) {
+    v.setUint16(p, r.id, true);
+    writeShortString(v, p + 2, r.name, LIM.ROOM_NAME);      // p+2 .. p+42
+    writeShortString(v, p + 43, r.desc, LIM.ROOM_DESC);     // p+43 .. p+298
+    DIRS.forEach((d, i) => v.setUint16(p + 299 + i * 2, r.exits[d] | 0, true));
+    v.setUint16(p + 311, r.points | 0, true);
+    v.setUint8(p + 313, 1);                                 // Active
+    v.setUint8(p + 314, 0);                                 // Reserved
+    p += BIN.ROOM;
+  }
+  for (const o of objects) {
+    v.setUint16(p, o.id, true);
+    writeShortString(v, p + 2, o.name, LIM.OBJ_NAME);       // p+2 .. p+32
+    writeShortString(v, p + 33, o.desc, LIM.OBJ_DESC);      // p+33 .. p+133
+    v.setUint16(p + 134, o.roomID | 0, true);
+    v.setUint16(p + 136, o.carriedBy | 0, true);
+    v.setUint8(p + 138, flagsToByte(o.flags));
+    v.setUint8(p + 139, 1);                                 // Active
+    writeShortString(v, p + 140, o.useText, LIM.USE_TEXT);  // p+140 .. p+240
+    v.setUint16(p + 241, o.points | 0, true);
+    v.setUint8(p + 243, 0);
+    p += BIN.OBJECT;
+  }
+  for (const m of mobs) {
+    v.setUint16(p, m.id, true);
+    writeShortString(v, p + 2, m.name, LIM.MOB_NAME);       // p+2 .. p+32
+    writeShortString(v, p + 33, m.desc, LIM.MOB_DESC);      // p+33 .. p+133
+    v.setUint16(p + 134, m.roomID | 0, true);
+    writeShortString(v, p + 136, m.dialogue, LIM.DIALOGUE); // p+136 .. p+336
+    v.setUint8(p + 337, 1);                                 // Active
+    v.setUint8(p + 338, 0); v.setUint8(p + 339, 0); v.setUint8(p + 340, 0);
+    p += BIN.MOB;
+  }
+  return buf;
+}
+
+function readBinary(buf, fileName) {
+  const v = new DataView(buf);
+  const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
+  if (magic !== "SORB") throw new Error("Not a Secret Orb binary world (missing SORB signature).");
+  const version = v.getUint16(4, true);
+  if (version !== 1 && version !== 2) throw new Error("Unsupported binary version " + version + ".");
+
+  const w = blankWorld();
+  const nRooms = v.getUint16(6, true), nObjects = v.getUint16(8, true), nMobs = v.getUint16(10, true);
+  w.startRoom = v.getUint16(12, true);
+
+  // Version 1 has a 16-byte header and no title, points or win condition.
+  let p;
+  if (version === 1) {
+    w.title = (fileName || "").replace(/\.[^.]*$/, "") || "Loaded World";
+    p = 16;
+  } else {
+    w.title = readShortString(v, 14, LIM.TITLE);
+    w.winRoomID = v.getUint16(55, true);
+    w.winObjectID = v.getUint16(57, true);
+    p = BIN.HEADER;
+  }
+  const RSZ = version === 1 ? 313 : BIN.ROOM;
+  const OSZ = version === 1 ? 242 : BIN.OBJECT;
+  const MSZ = version === 1 ? 339 : BIN.MOB;
+
+  for (let i = 0; i < nRooms; i++, p += RSZ) {
+    const r = newRoom(v.getUint16(p, true));
+    r.name = readShortString(v, p + 2, LIM.ROOM_NAME);
+    r.desc = readShortString(v, p + 43, LIM.ROOM_DESC);
+    DIRS.forEach((d, k) => { r.exits[d] = v.getUint16(p + 299 + k * 2, true); });
+    r.points = version === 2 ? v.getUint16(p + 311, true) : 0;
+    const active = v.getUint8(p + (version === 2 ? 313 : 311));
+    if (active) w.rooms.push(r);
+  }
+  for (let i = 0; i < nObjects; i++, p += OSZ) {
+    const o = newObject(v.getUint16(p, true));
+    o.name = readShortString(v, p + 2, LIM.OBJ_NAME);
+    o.desc = readShortString(v, p + 33, LIM.OBJ_DESC);
+    o.roomID = v.getUint16(p + 134, true);
+    o.carriedBy = v.getUint16(p + 136, true);
+    o.flags = byteToFlags(v.getUint8(p + 138));
+    o.useText = readShortString(v, p + 140, LIM.USE_TEXT);
+    o.points = version === 2 ? v.getUint16(p + 241, true) : 0;
+    if (v.getUint8(p + 139)) w.objects.push(o);
+  }
+  for (let i = 0; i < nMobs; i++, p += MSZ) {
+    const m = newMob(v.getUint16(p, true));
+    m.name = readShortString(v, p + 2, LIM.MOB_NAME);
+    m.desc = readShortString(v, p + 33, LIM.MOB_DESC);
+    m.roomID = v.getUint16(p + 134, true);
+    m.dialogue = readShortString(v, p + 136, LIM.DIALOGUE);
+    if (v.getUint8(p + 337)) w.mobs.push(m);
+  }
+  return w;
+}
+
+/* ---- Text (INI style) -------------------------------------------------- */
+// Values live on one line, so newlines are folded to spaces on the way out.
+const oneLine = s => String(s).replace(/[\r\n]+/g, " ").trim();
+
+function writeText() {
+  const L = [];
+  L.push("; Secret Orb World Data");
+  L.push("; Generated by the Secret Orb web editor");
+  L.push("");
+  L.push("[WORLD]");
+  L.push("TITLE=" + oneLine(world.title));
+  L.push("START=" + (world.startRoom | 0));
+  L.push("WINROOM=" + (world.winRoomID | 0));
+  L.push("WINOBJECT=" + (world.winObjectID | 0));
+  L.push("");
+  for (const r of world.rooms) {
+    L.push("[ROOM:" + r.id + "]");
+    L.push("NAME=" + oneLine(r.name));
+    L.push("DESC=" + oneLine(r.desc));
+    for (const d of DIRS) L.push(d.toUpperCase() + "=" + (r.exits[d] | 0));
+    L.push("POINTS=" + (r.points | 0));
+    L.push("");
+  }
+  for (const o of world.objects) {
+    L.push("[OBJECT:" + o.id + "]");
+    L.push("NAME=" + oneLine(o.name));
+    L.push("DESC=" + oneLine(o.desc));
+    L.push("ROOM=" + (o.roomID | 0));
+    L.push("CARRIEDBY=" + (o.carriedBy | 0));
+    L.push("FLAGS=" + FLAGS.filter(f => o.flags[f]).join(","));
+    L.push("USETEXT=" + oneLine(o.useText));
+    L.push("POINTS=" + (o.points | 0));
+    L.push("");
+  }
+  for (const m of world.mobs) {
+    L.push("[MOB:" + m.id + "]");
+    L.push("NAME=" + oneLine(m.name));
+    L.push("DESC=" + oneLine(m.desc));
+    L.push("ROOM=" + (m.roomID | 0));
+    L.push("DIALOGUE=" + oneLine(m.dialogue));
+    L.push("");
+  }
+  return L.join("\r\n");
+}
+
+function readText(src) {
+  const w = blankWorld();
+  let section = null, cur = null;
+  for (let raw of src.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line[0] === ";" || line[0] === "#") continue;
+    if (line[0] === "[") {
+      const m = /^\[([A-Z]+)(?::(\d+))?\]/i.exec(line);
+      if (!m) continue;
+      const kind = m[1].toUpperCase(), id = parseInt(m[2] || "0", 10);
+      if (kind === "WORLD") { section = "world"; cur = null; }
+      else if (kind === "ROOM") { section = "room"; cur = newRoom(id || w.rooms.length + 1); w.rooms.push(cur); }
+      else if (kind === "OBJECT") { section = "object"; cur = newObject(id || w.objects.length + 1); w.objects.push(cur); }
+      else if (kind === "MOB") { section = "mob"; cur = newMob(id || w.mobs.length + 1); w.mobs.push(cur); }
+      else { section = null; cur = null; }
+      continue;
+    }
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim().toUpperCase();
+    const val = line.slice(eq + 1).trim();
+    const num = parseInt(val, 10) || 0;
+    if (section === "world") {
+      if (key === "TITLE") w.title = val;
+      else if (key === "START") w.startRoom = num;
+      else if (key === "WINROOM") w.winRoomID = num;
+      else if (key === "WINOBJECT") w.winObjectID = num;
+    } else if (section === "room" && cur) {
+      if (key === "NAME") cur.name = val;
+      else if (key === "DESC") cur.desc = val;
+      else if (DIRS.includes(key.toLowerCase())) cur.exits[key.toLowerCase()] = num;
+      else if (key === "POINTS") cur.points = num;
+    } else if (section === "object" && cur) {
+      if (key === "NAME") cur.name = val;
+      else if (key === "DESC") cur.desc = val;
+      else if (key === "ROOM") cur.roomID = num;
+      else if (key === "CARRIEDBY") cur.carriedBy = num;
+      else if (key === "FLAGS") { const u = val.toUpperCase(); FLAGS.forEach(f => cur.flags[f] = u.includes(f.toUpperCase())); }
+      else if (key === "USETEXT") cur.useText = val;
+      else if (key === "POINTS") cur.points = num;
+    } else if (section === "mob" && cur) {
+      if (key === "NAME") cur.name = val;
+      else if (key === "DESC") cur.desc = val;
+      else if (key === "ROOM") cur.roomID = num;
+      else if (key === "DIALOGUE") cur.dialogue = val;
+    }
+  }
+  return w;
+}
+
+/* ---- BPL --------------------------------------------------------------
+   Tags are {KEY:VALUE}; a line ending in +++ continues onto the next one.
+   A closing brace inside a value would end the tag early, so braces are
+   stripped on the way out. */
+const bplSafe = s => oneLine(s).replace(/[{}]/g, "");
+
+function writeBPL() {
+  const L = [];
+  L.push("# Secret Orb World Definition (BPL Format)");
+  L.push("# Generated by the Secret Orb web editor");
+  L.push("");
+  L.push("{START:WORLD}");
+  L.push("{REVISION:2}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
+  if (world.winRoomID > 0 || world.winObjectID > 0)
+    L.push("{WINROOM:" + (world.winRoomID | 0) + "}{WINOBJ:" + (world.winObjectID | 0) + "}");
+  L.push("{END}");
+  L.push("");
+  for (const r of world.rooms) {
+    L.push("{START:ROOM}");
+    L.push("{REVISION:2}");
+    L.push("{OC:" + r.id + "}{VAR:R" + r.id + "}{NAME:" + bplSafe(r.name) + "}+++");
+    L.push("{DESC:" + bplSafe(r.desc) + "}+++");
+    L.push(DIRS.map(d => "{" + d.toUpperCase() + ":" + (r.exits[d] | 0) + "}").join(""));
+    if (r.points > 0) L.push("{POINTS:" + r.points + "}");
+    L.push("{END}");
+    L.push("");
+  }
+  for (const o of world.objects) {
+    L.push("{START:OBJECT}");
+    L.push("{REVISION:2}");
+    L.push("{OC:" + o.id + "}{VAR:O" + o.id + "}{NAME:" + bplSafe(o.name) + "}+++");
+    L.push("{DESC:" + bplSafe(o.desc) + "}+++");
+    let line = "{ROOM:" + (o.roomID | 0) + "}";
+    if (o.carriedBy > 0) line += "{CARRIEDBY:" + o.carriedBy + "}";
+    const fl = FLAGS.filter(f => o.flags[f]).join(",");
+    if (fl) line += "{FLAGS:" + fl + "}";
+    L.push(line + "+++");
+    if (o.useText) L.push("{USETEXT:" + bplSafe(o.useText) + "}");
+    if (o.points > 0) L.push("{POINTS:" + o.points + "}");
+    L.push("{END}");
+    L.push("");
+  }
+  for (const m of world.mobs) {
+    L.push("{START:MOB}");
+    L.push("{REVISION:2}");
+    L.push("{OC:" + m.id + "}{VAR:M" + m.id + "}{NAME:" + bplSafe(m.name) + "}+++");
+    L.push("{DESC:" + bplSafe(m.desc) + "}+++");
+    L.push("{ROOM:" + (m.roomID | 0) + "}");
+    if (m.dialogue) L.push("{DIALOGUE:" + bplSafe(m.dialogue) + "}");
+    L.push("{END}");
+    L.push("");
+  }
+  return L.join("\r\n");
+}
+
+function readBPL(src) {
+  const w = blankWorld();
+  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB"];
+  let full = "", inBlock = false, type = "", t = null;
+
+  const flush = () => {
+    if (!inBlock || !t) { inBlock = false; type = ""; t = null; return; }
+    if (type === "ROOM") {
+      const r = newRoom(t.oc || w.rooms.length + 1);
+      r.name = t.NAME || ""; r.desc = t.DESC || "";
+      DIRS.forEach(d => r.exits[d] = parseInt(t[d.toUpperCase()] || "0", 10) || 0);
+      r.points = parseInt(t.POINTS || "0", 10) || 0;
+      w.rooms.push(r);
+    } else if (type === "OBJECT") {
+      const o = newObject(t.oc || w.objects.length + 1);
+      o.name = t.NAME || ""; o.desc = t.DESC || "";
+      o.roomID = parseInt(t.ROOM || "0", 10) || 0;
+      o.carriedBy = parseInt(t.CARRIEDBY || "0", 10) || 0;
+      const fl = (t.FLAGS || "").toUpperCase();
+      FLAGS.forEach(f => o.flags[f] = fl.includes(f.toUpperCase()));
+      o.useText = t.USETEXT || "";
+      o.points = parseInt(t.POINTS || "0", 10) || 0;
+      w.objects.push(o);
+    } else if (type === "MOB") {
+      const m = newMob(t.oc || w.mobs.length + 1);
+      m.name = t.NAME || ""; m.desc = t.DESC || "";
+      m.roomID = parseInt(t.ROOM || "0", 10) || 0;
+      m.dialogue = t.DIALOGUE || "";
+      w.mobs.push(m);
+    }
+    inBlock = false; type = ""; t = null;
+  };
+
+  for (let raw of src.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line[0] === "#") continue;
+    full = full ? full + line : line;
+    if (full.endsWith("+++")) { full = full.slice(0, -3); continue; }  // wait for the rest
+
+    for (const m of full.matchAll(/\{([^:}]+):([^}]*)\}/g)) {
+      const key = m[1].trim().toUpperCase(), val = m[2];
+      // START both opens a block and, inside WORLD, names the starting room
+      if (key === "START" && (!inBlock || BLOCK_TYPES.includes(val.trim().toUpperCase()))) {
+        if (inBlock) flush();
+        inBlock = true; type = val.trim().toUpperCase(); t = {};
+        continue;
+      }
+      if (key === "END") { flush(); continue; }
+      if (!inBlock || !t) continue;
+      if (key === "OC") t.oc = parseInt(val, 10) || 0;
+      else if (key === "TITLE") w.title = val;
+      else if (key === "START") w.startRoom = parseInt(val.replace(/^[A-Za-z]+/, ""), 10) || 1;
+      else if (key === "WINROOM") w.winRoomID = parseInt(val, 10) || 0;
+      else if (key === "WINOBJ") w.winObjectID = parseInt(val, 10) || 0;
+      else if (key === "DESCRIPTION") t.DESC = val;
+      else t[key] = val;
+    }
+    full = "";
+  }
+  flush();
+  return w;
+}
+
+/* ---- Format detection & file I/O --------------------------------------- */
+function parseWorldFile(buf, fileName) {
+  const bytes = new Uint8Array(buf);
+  const head = String.fromCharCode(...bytes.slice(0, 4));
+  if (head === "SORB") return readBinary(buf, fileName);
+  let text = "";
+  for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+  if (/\.bpl$/i.test(fileName || "") || /\{\s*START\s*:/i.test(text)) return readBPL(text);
+  return readText(text);
+}
+
+function download(name, data, mime) {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ============================================================================
+   Validation
+   ========================================================================== */
+function validate() {
+  const out = [];
+  const err = (what, where) => out.push({ level: "error", what, where });
+  const warn = (what, where) => out.push({ level: "warn", what, where });
+
+  // Duplicate ids
+  for (const [label, list] of [["Room", world.rooms], ["Object", world.objects], ["Mob", world.mobs]]) {
+    const seen = new Set();
+    for (const e of list) {
+      if (seen.has(e.id)) err(label + " ID " + e.id + " is used more than once.", label + " " + e.id);
+      seen.add(e.id);
+      if (e.id === 0) err(label + " has ID 0, which the engine treats as “nowhere”.", label + " " + (e.name || "unnamed"));
+    }
+  }
+  // Capacity
+  if (world.rooms.length > LIM.ROOMS) err("More than " + LIM.ROOMS + " rooms; the engine will drop the extras.", "world");
+  if (world.objects.length > LIM.OBJECTS) err("More than " + LIM.OBJECTS + " objects; the engine will drop the extras.", "world");
+  if (world.mobs.length > LIM.MOBS) err("More than " + LIM.MOBS + " mobs; the engine will drop the extras.", "world");
+
+  // Names and lengths
+  const tooLong = (val, max, what, where) => {
+    if (String(val).length > max) warn(what + " is " + String(val).length + " characters; it will be cut to " + max + ".", where);
+  };
+  tooLong(world.title, LIM.TITLE, "World title", "world");
+  for (const r of world.rooms) {
+    if (!r.name.trim()) warn("Room has no name.", "room " + r.id);
+    tooLong(r.name, LIM.ROOM_NAME, "Room name", "room " + r.id);
+    tooLong(r.desc, LIM.ROOM_DESC, "Room description", "room " + r.id);
+  }
+  for (const o of world.objects) {
+    if (!o.name.trim()) warn("Object has no name.", "object " + o.id);
+    tooLong(o.name, LIM.OBJ_NAME, "Object name", "object " + o.id);
+    tooLong(o.desc, LIM.OBJ_DESC, "Object description", "object " + o.id);
+    tooLong(o.useText, LIM.USE_TEXT, "Use text", "object " + o.id);
+  }
+  for (const m of world.mobs) {
+    if (!m.name.trim()) warn("Mob has no name.", "mob " + m.id);
+    tooLong(m.name, LIM.MOB_NAME, "Mob name", "mob " + m.id);
+    tooLong(m.desc, LIM.MOB_DESC, "Mob description", "mob " + m.id);
+    tooLong(m.dialogue, LIM.DIALOGUE, "Dialogue", "mob " + m.id);
+  }
+
+  // References
+  for (const r of world.rooms)
+    for (const d of DIRS) {
+      const t = r.exits[d] | 0;
+      if (t && !roomById(t)) err("The " + DIR_LABEL[d] + " exit points at room " + t + ", which does not exist.", "room " + r.id);
+    }
+  for (const o of world.objects) {
+    if (o.roomID && !roomById(o.roomID)) err("Object sits in room " + o.roomID + ", which does not exist.", "object " + o.id);
+    if (o.carriedBy && !mobById(o.carriedBy)) err("Object is carried by mob " + o.carriedBy + ", which does not exist.", "object " + o.id);
+    if (!o.roomID && !o.carriedBy) warn("Object is in room 0 and carried by nobody, so the player can never find it.", "object " + o.id);
+  }
+  for (const m of world.mobs)
+    if (!m.roomID || !roomById(m.roomID)) err("Mob is in room " + m.roomID + ", which does not exist.", "mob " + m.id);
+
+  // Start and win condition
+  if (!roomById(world.startRoom)) err("Start room " + world.startRoom + " does not exist.", "world");
+  if (world.winRoomID) {
+    if (!roomById(world.winRoomID)) err("Win room " + world.winRoomID + " does not exist.", "world");
+  } else if (world.rooms.length) {
+    warn("No win room is set, so the adventure cannot be completed.", "world");
+  }
+  if (world.winObjectID) {
+    const wo = objectById(world.winObjectID);
+    if (!wo) err("Win object " + world.winObjectID + " does not exist.", "world");
+    else if (!wo.flags.pickup) err("Win object “" + (wo.name || "unnamed") + "” cannot be picked up, so the win condition is unreachable.", "object " + wo.id);
+  }
+
+  // Reachability from the start room
+  const start = roomById(world.startRoom);
+  if (start && world.rooms.length > 1) {
+    const seen = new Set([start.id]);
+    const queue = [start];
+    while (queue.length) {
+      const r = queue.shift();
+      for (const d of DIRS) {
+        const t = r.exits[d] | 0;
+        if (t && !seen.has(t) && roomById(t)) { seen.add(t); queue.push(roomById(t)); }
+      }
+    }
+    for (const r of world.rooms)
+      if (!seen.has(r.id))
+        err("Room “" + (r.name || "unnamed") + "” cannot be reached from the start room.", "room " + r.id);
+    if (world.winRoomID && roomById(world.winRoomID) && !seen.has(world.winRoomID))
+      err("The win room cannot be reached from the start room.", "world");
+  }
+
+  // One-way exits are legal but usually a mistake
+  for (const r of world.rooms)
+    for (const d of DIRS) {
+      const t = r.exits[d] | 0;
+      if (!t) continue;
+      const other = roomById(t);
+      if (other && (other.exits[OPPOSITE[d]] | 0) !== r.id)
+        warn("The " + DIR_LABEL[d] + " exit to room " + t + " has no matching way back.", "room " + r.id);
+    }
+
+  // Inventory pressure
+  const takeable = world.objects.filter(o => o.flags.pickup).length;
+  if (takeable > LIM.INVENTORY)
+    warn("There are " + takeable + " takeable objects but the player can only carry " + LIM.INVENTORY + " at a time.", "world");
+
+  return out;
+}
+
+/* ============================================================================
+   Map layout: walk the compass exits from the start room onto a grid.
+   ========================================================================== */
+const DELTA = { north: [0, -1], south: [0, 1], east: [1, 0], west: [-1, 0] };
+
+function layoutMap() {
+  const placed = new Map();          // room id -> {x, y}
+  const taken = new Set();           // "x,y"
+  const key = (x, y) => x + "," + y;
+
+  const claim = (id, x, y) => {
+    if (taken.has(key(x, y))) {      // spiral outwards for the nearest free cell
+      let found = false;
+      for (let radius = 1; radius < 40 && !found; radius++)
+        for (let dx = -radius; dx <= radius && !found; dx++)
+          for (let dy = -radius; dy <= radius && !found; dy++) {
+            if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue;
+            if (!taken.has(key(x + dx, y + dy))) { x += dx; y += dy; found = true; }
+          }
+      if (!found) return null;
+    }
+    taken.add(key(x, y));
+    placed.set(id, { x, y });
+    return { x, y };
+  };
+
+  const seeds = [];
+  if (roomById(world.startRoom)) seeds.push(world.startRoom);
+  for (const r of world.rooms) if (!seeds.includes(r.id)) seeds.push(r.id);
+
+  for (const seedId of seeds) {
+    if (placed.has(seedId)) continue;
+    // Put each new component below everything placed so far
+    let baseY = 0;
+    for (const p of placed.values()) baseY = Math.max(baseY, p.y + 2);
+    claim(seedId, 0, baseY);
+    const queue = [seedId];
+    while (queue.length) {
+      const id = queue.shift();
+      const r = roomById(id), at = placed.get(id);
+      if (!r || !at) continue;
+      for (const d of ["north", "south", "east", "west"]) {
+        const t = r.exits[d] | 0;
+        if (!t || placed.has(t) || !roomById(t)) continue;
+        const [dx, dy] = DELTA[d];
+        if (claim(t, at.x + dx, at.y + dy)) queue.push(t);
+      }
+    }
+  }
+  return placed;
+}
+
+function renderMap() {
+  const wrap = document.getElementById("mapWrap");
+  if (!world.rooms.length) {
+    wrap.innerHTML = '<p class="empty">No rooms yet. Add one on the Rooms tab.</p>';
+    return;
+  }
+  const placed = layoutMap();
+  const CW = 138, CH = 74, GAP_X = 46, GAP_Y = 40, PAD = 24;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of placed.values()) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const px = p => PAD + (p.x - minX) * (CW + GAP_X);
+  const py = p => PAD + (p.y - minY) * (CH + GAP_Y);
+  const W = PAD * 2 + (maxX - minX + 1) * (CW + GAP_X) - GAP_X;
+  const H = PAD * 2 + (maxY - minY + 1) * (CH + GAP_Y) - GAP_Y;
+
+  // Reachability, so unreachable rooms can be flagged on the map too
+  const reach = new Set();
+  const s = roomById(world.startRoom);
+  if (s) {
+    const q = [s]; reach.add(s.id);
+    while (q.length) {
+      const r = q.shift();
+      for (const d of DIRS) {
+        const t = r.exits[d] | 0;
+        if (t && !reach.has(t) && roomById(t)) { reach.add(t); q.push(roomById(t)); }
+      }
+    }
+  }
+
+  const esc = t => String(t).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const clip = (t, n) => (t.length > n ? t.slice(0, n - 1) + "…" : t);
+  let links = "", nodes = "";
+  const drawn = new Set();
+
+  for (const r of world.rooms) {
+    const a = placed.get(r.id);
+    if (!a) continue;
+    for (const d of ["north", "south", "east", "west"]) {
+      const t = r.exits[d] | 0;
+      const b = placed.get(t);
+      if (!t || !b) continue;
+      const pairKey = [Math.min(r.id, t), Math.max(r.id, t), d === "north" || d === "south" ? "v" : "h"].join(":");
+      const other = roomById(t);
+      const twoWay = other && (other.exits[OPPOSITE[d]] | 0) === r.id;
+      if (twoWay && drawn.has(pairKey)) continue;
+      drawn.add(pairKey);
+      const x1 = px(a) + CW / 2, y1 = py(a) + CH / 2;
+      const x2 = px(b) + CW / 2, y2 = py(b) + CH / 2;
+      links += '<line class="link' + (twoWay ? "" : " oneway") + '" x1="' + x1 + '" y1="' + y1 +
+               '" x2="' + x2 + '" y2="' + y2 + '"/>';
+    }
+  }
+  for (const r of world.rooms) {
+    const a = placed.get(r.id);
+    if (!a) continue;
+    const x = px(a), y = py(a);
+    const cls = ["node"];
+    if (r.id === world.startRoom) cls.push("start");
+    if (r.id === world.winRoomID) cls.push("win");
+    if (s && !reach.has(r.id)) cls.push("orphan");
+    if (sel.rooms === r.id) cls.push("sel");
+    const vert = (r.exits.up ? " ↑" + r.exits.up : "") + (r.exits.down ? " ↓" + r.exits.down : "");
+    const pts = r.points ? "  +" + r.points : "";
+    nodes += '<g class="' + cls.join(" ") + '" data-room="' + r.id + '" tabindex="0" role="button" ' +
+             'aria-label="Room ' + r.id + ' ' + esc(r.name) + '">' +
+             '<rect x="' + x + '" y="' + y + '" width="' + CW + '" height="' + CH + '" rx="6"/>' +
+             '<text x="' + (x + 10) + '" y="' + (y + 22) + '">' + esc(clip(r.name || "(unnamed)", 17)) + '</text>' +
+             '<text class="sub" x="' + (x + 10) + '" y="' + (y + 40) + '">#' + r.id + pts + '</text>' +
+             '<text class="sub" x="' + (x + 10) + '" y="' + (y + 57) + '">' + esc(vert.trim()) + '</text>' +
+             '</g>';
+  }
+  wrap.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' +
+                   links + nodes + '</svg>';
+  wrap.querySelectorAll("[data-room]").forEach(g => {
+    const go = () => { sel.rooms = parseInt(g.dataset.room, 10); showTab("rooms"); };
+    g.addEventListener("click", go);
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+}
+
+/* ============================================================================
+   Playtest. Mirrors the command handling in pascal/src/gamecore.pas.
+   ========================================================================== */
+let game = null;
+let gameStale = false;   // set whenever the world changes, so Playtest restarts
+
+function startGame() {
+  gameStale = false;
+  game = {
+    room: world.startRoom,
+    inv: [],
+    score: 0,
+    turns: 0,
+    visited: new Set(),
+    taken: new Set(),
+    // objects move around during play, so work on a copy
+    place: new Map(world.objects.map(o => [o.id, { roomID: o.roomID, carriedBy: o.carriedBy }])),
+    mobPlace: new Map(world.mobs.map(m => [m.id, m.roomID])),
+    over: false
+  };
+  const start = roomById(world.startRoom);
+  document.getElementById("screen").innerHTML = "";
+  if (!start) { say("No start room — set one in the world bar.", "msg"); game.over = true; return; }
+  game.visited.add(start.id);
+  game.score += start.points | 0;
+  describe();
+  updateStatus();
+}
+
+function say(text, cls) {
+  const scr = document.getElementById("screen");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text + "\n";
+  scr.appendChild(span);
+  scr.scrollTop = scr.scrollHeight;
+}
+
+function objectsHere() {
+  return world.objects.filter(o => {
+    const p = game.place.get(o.id);
+    return p && p.roomID === game.room && !p.carriedBy;
+  });
+}
+function mobsHere() { return world.mobs.filter(m => game.mobPlace.get(m.id) === game.room); }
+const carried = () => game.inv.map(id => objectById(id)).filter(Boolean);
+
+function describe() {
+  const r = roomById(game.room);
+  if (!r) { say("ERROR: Room not found!", "msg"); return; }
+  say("");
+  say(r.name || "(unnamed room)", "rm");
+  if (r.desc) say(r.desc);
+  const objs = objectsHere();
+  if (objs.length) say("You see: " + objs.map(o => o.name).join(", "), "ob");
+  for (const m of mobsHere()) say(m.name + " is here.", "mb");
+  const exits = DIRS.filter(d => r.exits[d]).map(d => DIR_LABEL[d]);
+  say("Exits: " + (exits.length ? exits.join(" ") : "None"), "ex");
+}
+
+// Substring match, the same rule FindObjectByName uses
+const matches = (name, noun) => name.toUpperCase().includes(noun.toUpperCase());
+const findHere = noun => objectsHere().find(o => matches(o.name, noun)) || null;
+const findCarried = noun => carried().find(o => matches(o.name, noun)) || null;
+const findVisible = noun => findHere(noun) || findCarried(noun);
+const findMob = noun => mobsHere().find(m => matches(m.name, noun)) || null;
+
+function checkWin() {
+  if (!world.winRoomID || game.room !== world.winRoomID) return;
+  if (world.winObjectID && !game.inv.includes(world.winObjectID)) return;
+  game.over = true;
+  say("");
+  say("*** YOU HAVE WON ***", "win");
+  say(world.title, "win");
+  say("Final score: " + game.score + (maxScore() ? " of " + maxScore() : ""), "msg");
+  say("Turns taken: " + game.turns, "msg");
+}
+
+function move(dir) {
+  const r = roomById(game.room);
+  if (!r) { say("Error: Current room not found!", "msg"); return; }
+  const target = r.exits[dir] | 0;
+  if (!target) { say("You cannot go that way.", "msg"); return; }
+  const dest = roomById(target);
+  if (!dest) { say("That path leads nowhere.", "msg"); return; }
+  game.room = target;
+  let msg = "You go " + DIR_LABEL[dir] + ".";
+  if (!game.visited.has(target)) {
+    game.visited.add(target);
+    if (dest.points > 0) { game.score += dest.points; msg += " [+" + dest.points + "]"; }
+  }
+  say(msg, "msg");
+  describe();
+}
+
+function runCommand(input) {
+  if (!game || game.over) return;
+  const trimmed = input.trim();
+  const sp = trimmed.indexOf(" ");
+  const verb = (sp < 0 ? trimmed : trimmed.slice(0, sp)).toUpperCase();
+  let noun = sp < 0 ? "" : trimmed.slice(sp + 1).trim();
+  let cmd = null;
+
+  if (verb === "LOOK" && /^AT\s+/i.test(noun)) { noun = noun.replace(/^AT\s+/i, "").trim(); cmd = "examine"; }
+  else if (["N", "NORTH"].includes(verb)) cmd = "north";
+  else if (["S", "SOUTH"].includes(verb)) cmd = "south";
+  else if (["E", "EAST"].includes(verb)) cmd = "east";
+  else if (["W", "WEST"].includes(verb)) cmd = "west";
+  else if (["U", "UP"].includes(verb)) cmd = "up";
+  else if (["D", "DOWN"].includes(verb)) cmd = "down";
+  else if (["L", "LOOK"].includes(verb)) cmd = "look";
+  else if (["X", "EX", "EXAMINE"].includes(verb)) cmd = "examine";
+  else if (["TAKE", "GET", "GRAB"].includes(verb)) cmd = "take";
+  else if (["DROP", "PUT"].includes(verb)) cmd = "drop";
+  else if (verb === "USE") cmd = "use";
+  else if (verb === "OPEN") cmd = "open";
+  else if (verb === "READ") cmd = "read";
+  else if (["TALK", "SAY", "SPEAK"].includes(verb)) cmd = "talk";
+  else if (["I", "INV", "INVENTORY"].includes(verb)) cmd = "inventory";
+  else if (verb === "SCORE") cmd = "score";
+  else if (["SAVE", "LOAD", "RESTORE"].includes(verb)) cmd = "meta";
+  else if (verb === "") cmd = "none";
+  else cmd = "unknown";
+
+  const usesTurn = !["none", "unknown", "score", "meta"].includes(cmd);
+
+  switch (cmd) {
+    case "north": case "south": case "east": case "west": case "up": case "down":
+      move(cmd); break;
+    case "look": describe(); break;
+    case "examine": {
+      if (!noun) { say("Examine what?", "msg"); break; }
+      const o = findVisible(noun);
+      if (o) { say(o.desc || "You see nothing special.", "msg"); break; }
+      const m = findMob(noun);
+      say(m ? (m.desc || "You see nothing special.") : "You don't see that here.", "msg");
+      break;
+    }
+    case "take": {
+      if (!noun) { say("Take what?", "msg"); break; }
+      const o = findHere(noun);
+      if (!o) {
+        say(findCarried(noun) ? "You already have that." : "You don't see that here.", "msg");
+        break;
+      }
+      if (!o.flags.pickup) { say("You can't take that.", "msg"); break; }
+      if (game.inv.length >= LIM.INVENTORY) { say("Your inventory is full.", "msg"); break; }
+      game.inv.push(o.id);
+      game.place.set(o.id, { roomID: 0, carriedBy: 0 });
+      let msg = "You take the " + o.name + ".";
+      if (!game.taken.has(o.id)) {
+        game.taken.add(o.id);
+        if (o.points > 0) { game.score += o.points; msg += " [+" + o.points + "]"; }
+      }
+      say(msg, "msg");
+      break;
+    }
+    case "drop": {
+      if (!noun) { say("Drop what?", "msg"); break; }
+      const o = findCarried(noun);
+      if (!o) { say("You don't have that.", "msg"); break; }
+      game.inv.splice(game.inv.indexOf(o.id), 1);
+      game.place.set(o.id, { roomID: game.room, carriedBy: 0 });
+      say("You drop the " + o.name + ".", "msg");
+      break;
+    }
+    case "use": case "open": case "read": {
+      if (!noun) { say(cmd[0].toUpperCase() + cmd.slice(1) + " what?", "msg"); break; }
+      const o = findVisible(noun);
+      if (!o) { say("You don't see that here.", "msg"); break; }
+      if (!o.flags[cmd]) {
+        say(cmd === "read" ? "There's nothing to read on that."
+                           : "You can't " + cmd + " that.", "msg");
+        break;
+      }
+      say(o.useText || "You " + cmd + " the " + o.name + ".", "msg");
+      break;
+    }
+    case "talk": {
+      if (!noun) { say("Talk to whom?", "msg"); break; }
+      const who = noun.replace(/^TO\s+/i, "").trim();
+      const m = findMob(who);
+      if (!m) { say("There's no one here by that name.", "msg"); break; }
+      say(m.dialogue ? m.name + ' says: "' + m.dialogue + '"' : m.name + " has nothing to say.", "msg");
+      break;
+    }
+    case "inventory": {
+      const held = carried();
+      say(held.length ? "You are carrying: " + held.map(o => o.name).join(", ")
+                      : "You are carrying nothing.", "msg");
+      break;
+    }
+    case "score":
+      say("Score: " + game.score + (maxScore() ? " of " + maxScore() : "") + "   Turns: " + game.turns, "msg");
+      break;
+    case "meta":
+      say("SAVE and LOAD only work in the real game.", "msg");
+      break;
+    case "unknown":
+      say("I don't understand that command.", "msg");
+      break;
+  }
+
+  if (usesTurn) game.turns++;
+  if (!game.over) checkWin();
+  updateStatus();
+}
+
+function updateStatus() {
+  if (!game) return;
+  const r = roomById(game.room);
+  document.getElementById("pRoom").textContent = r ? "#" + r.id : "—";
+  document.getElementById("pScore").textContent = game.score + (maxScore() ? "/" + maxScore() : "");
+  document.getElementById("pTurns").textContent = game.turns;
+  document.getElementById("pInv").textContent = game.inv.length + "/" + LIM.INVENTORY;
+}
+
+/* ============================================================================
+   UI
+   ========================================================================== */
+const $ = id => document.getElementById(id);
+
+function toast(msg, bad) {
+  const el = document.createElement("div");
+  el.className = "toast" + (bad ? " bad" : "");
+  el.textContent = msg;
+  el.setAttribute("role", "status");
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+function showTab(name) {
+  document.querySelectorAll("nav button").forEach(b =>
+    b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  document.querySelectorAll(".panel").forEach(p =>
+    p.classList.toggle("active", p.id === "panel-" + name));
+  if (name === "map") renderMap();
+  if (name === "check") renderIssues();
+  if (name === "play") {
+    // A session running against an edited world would be misleading
+    if (!game || gameStale) startGame();
+    setTimeout(() => $("cmdInput").focus(), 0);
+  }
+  if (["rooms", "objects", "mobs"].includes(name)) renderList(name);
+}
+
+function counterFor(el, value, max) {
+  const n = String(value).length;
+  el.textContent = n + "/" + max;
+  el.classList.toggle("over", n > max);
+}
+
+function renderWorldBar() {
+  gameStale = true;   // every edit routes through here
+  $("wTitle").value = world.title;
+  $("wStart").value = world.startRoom;
+  $("wWinRoom").value = world.winRoomID;
+  $("wWinObj").value = world.winObjectID;
+  counterFor($("cTitle"), world.title, LIM.TITLE);
+  $("sScore").textContent = maxScore();
+  $("sCounts").textContent = world.rooms.length + " rooms, " +
+    world.objects.length + " objects, " + world.mobs.length + " mobs";
+  $("bRooms").textContent = world.rooms.length;
+  $("bObjects").textContent = world.objects.length;
+  $("bMobs").textContent = world.mobs.length;
+  const issues = validate();
+  const bad = issues.filter(i => i.level === "error").length;
+  const badge = $("bIssues");
+  badge.textContent = issues.length;
+  badge.classList.toggle("warn", bad > 0);
+}
+
+function renderAll() {
+  renderWorldBar();
+  ["rooms", "objects", "mobs"].forEach(renderList);
+  const active = document.querySelector("nav button[aria-selected=true]");
+  if (active && active.dataset.tab === "map") renderMap();
+  if (active && active.dataset.tab === "check") renderIssues();
+}
+
+function renderList(kind) {
+  const ul = $("list" + kind[0].toUpperCase() + kind.slice(1));
+  const list = world[kind];
+  ul.innerHTML = "";
+  if (!list.length) {
+    ul.innerHTML = '<li class="empty" style="cursor:default">Nothing here yet.</li>';
+  } else {
+    for (const e of list) {
+      const li = document.createElement("li");
+      li.setAttribute("aria-current", String(sel[kind] === e.id));
+      let tag = "";
+      if (kind === "rooms") {
+        const n = DIRS.filter(d => e.exits[d]).length;
+        tag = n + (n === 1 ? " exit" : " exits") + (e.points ? " · +" + e.points : "");
+      } else if (kind === "objects") {
+        tag = (e.roomID ? "room " + e.roomID : e.carriedBy ? "mob " + e.carriedBy : "nowhere") +
+              (e.points ? " · +" + e.points : "");
+      } else {
+        tag = "room " + e.roomID;
+      }
+      li.innerHTML = '<span class="id"></span><span class="nm"></span><span class="tag"></span>';
+      li.querySelector(".id").textContent = e.id;
+      li.querySelector(".nm").textContent = e.name || "(unnamed)";
+      li.querySelector(".tag").textContent = tag;
+      li.addEventListener("click", () => { sel[kind] = e.id; renderList(kind); renderForm(kind); });
+      ul.appendChild(li);
+    }
+  }
+  renderForm(kind);
+}
+
+function roomOptions(current, allowNone, noneLabel) {
+  let html = "";
+  if (allowNone) html += '<option value="0"' + (current ? "" : " selected") + ">" + noneLabel + "</option>";
+  for (const r of world.rooms)
+    html += '<option value="' + r.id + '"' + (r.id === current ? " selected" : "") + ">" +
+            r.id + " — " + escapeHtml(r.name || "(unnamed)") + "</option>";
+  if (current && !roomById(current))
+    html += '<option value="' + current + '" selected>' + current + " — (missing room)</option>";
+  return html;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function renderForm(kind) {
+  const box = $("form" + { rooms: "Room", objects: "Object", mobs: "Mob" }[kind]);
+  const list = world[kind];
+  const e = list.find(x => x.id === sel[kind]);
+  if (!e) {
+    box.innerHTML = '<p class="empty">Select something from the list, or add a new one.</p>';
+    return;
+  }
+  const singular = { rooms: "Room", objects: "Object", mobs: "Mob" }[kind];
+  let inner = "<h3>" + singular + " " + e.id + "</h3>";
+
+  const textField = (id, label, val, max, area) => area
+    ? '<div class="field"><label for="' + id + '">' + label +
+      ' <span class="counter" id="c-' + id + '"></span></label>' +
+      '<textarea id="' + id + '">' + escapeHtml(val) + "</textarea></div>"
+    : '<div class="field"><label for="' + id + '">' + label +
+      ' <span class="counter" id="c-' + id + '"></span></label>' +
+      '<input type="text" id="' + id + '" value="' + escapeHtml(val) + '"></div>';
+
+  inner += '<div class="row">' +
+    '<div class="field" style="flex:2 1 220px">' +
+    '<label for="f-name">Name <span class="counter" id="c-f-name"></span></label>' +
+    '<input type="text" id="f-name" value="' + escapeHtml(e.name) + '"></div>' +
+    '<div class="field" style="flex:0 0 96px"><label for="f-id">ID</label>' +
+    '<input type="number" id="f-id" min="1" step="1" value="' + e.id + '"></div>';
+  if (kind !== "mobs")
+    inner += '<div class="field" style="flex:0 0 96px"><label for="f-points">Points</label>' +
+             '<input type="number" id="f-points" min="0" step="1" value="' + (e.points | 0) + '"></div>';
+  inner += "</div>";
+
+  const descMax = kind === "rooms" ? LIM.ROOM_DESC : LIM.OBJ_DESC;
+  inner += textField("f-desc", "Description", e.desc, descMax, true);
+
+  if (kind === "rooms") {
+    inner += '<div class="field"><label>Exits &mdash; the room each direction leads to</label><div class="exits">';
+    for (const d of DIRS)
+      inner += '<div><label for="f-ex-' + d + '">' + DIR_LABEL[d] + "</label>" +
+               '<select id="f-ex-' + d + '">' + roomOptions(e.exits[d] | 0, true, "— none —") + "</select></div>";
+    inner += "</div></div>";
+    inner += '<p class="hint">Points are scored the first time the player enters this room.</p>';
+  } else if (kind === "objects") {
+    inner += '<div class="row">' +
+      '<div class="field"><label for="f-room">In room</label><select id="f-room">' +
+      roomOptions(e.roomID | 0, true, "— nowhere —") + "</select></div>" +
+      '<div class="field"><label for="f-carried">Carried by mob</label><select id="f-carried">' +
+      '<option value="0"' + (e.carriedBy ? "" : " selected") + ">— nobody —</option>" +
+      world.mobs.map(m => '<option value="' + m.id + '"' + (m.id === e.carriedBy ? " selected" : "") +
+        ">" + m.id + " — " + escapeHtml(m.name || "(unnamed)") + "</option>").join("") +
+      "</select></div></div>";
+    inner += '<div class="field"><label>What the player can do with it</label><div class="flags">' +
+      FLAGS.map(f => '<label><input type="checkbox" id="f-flag-' + f + '"' +
+        (e.flags[f] ? " checked" : "") + "> " + f + "</label>").join("") + "</div></div>";
+    inner += textField("f-usetext", "Use text — shown for USE, OPEN and READ", e.useText, LIM.USE_TEXT, true);
+    inner += '<p class="hint">Points are scored the first time the player takes this object.</p>';
+  } else {
+    inner += '<div class="field"><label for="f-room">In room</label><select id="f-room">' +
+      roomOptions(e.roomID | 0, true, "— nowhere —") + "</select></div>";
+    inner += textField("f-dialogue", "Dialogue", e.dialogue, LIM.DIALOGUE, true);
+  }
+
+  inner += '<div class="formfoot">';
+  if (kind === "rooms")
+    inner += '<button id="f-linkback" title="Add matching return exits from every room this one leads to">Link exits both ways</button>';
+  inner += '<span class="spacer"></span>' +
+           '<button class="danger" id="f-delete">Delete ' + singular.toLowerCase() + "</button></div>";
+  box.innerHTML = inner;
+
+  // ---- wiring
+  const nameMax = kind === "rooms" ? LIM.ROOM_NAME : kind === "objects" ? LIM.OBJ_NAME : LIM.MOB_NAME;
+  const bind = (id, max, apply) => {
+    const el = $(id);
+    if (!el) return;
+    const counter = $("c-" + id);
+    const sync = () => {
+      apply(el.value);
+      if (counter) counterFor(counter, el.value, max);
+      renderWorldBar();
+      renderListRowsOnly(kind);
+    };
+    if (counter) counterFor(counter, el.value, max);
+    el.addEventListener("input", sync);
+  };
+  bind("f-name", nameMax, v => e.name = v);
+  bind("f-desc", descMax, v => e.desc = v);
+  if (kind === "objects") bind("f-usetext", LIM.USE_TEXT, v => e.useText = v);
+  if (kind === "mobs") bind("f-dialogue", LIM.DIALOGUE, v => e.dialogue = v);
+
+  const pts = $("f-points");
+  if (pts) pts.addEventListener("input", () => {
+    e.points = Math.max(0, parseInt(pts.value, 10) || 0);
+    renderWorldBar(); renderListRowsOnly(kind);
+  });
+
+  $("f-id").addEventListener("change", () => {
+    const want = parseInt($("f-id").value, 10) || 0;
+    if (want < 1) { toast("IDs start at 1.", true); $("f-id").value = e.id; return; }
+    if (want !== e.id && list.some(x => x.id === want)) {
+      toast("Another " + singular.toLowerCase() + " already uses ID " + want + ".", true);
+      $("f-id").value = e.id;
+      return;
+    }
+    const old = e.id;
+    e.id = want;
+    repointReferences(kind, old, want);
+    sel[kind] = want;
+    renderAll();
+    renderForm(kind);
+  });
+
+  if (kind === "rooms") {
+    for (const d of DIRS)
+      $("f-ex-" + d).addEventListener("change", ev => {
+        e.exits[d] = parseInt(ev.target.value, 10) || 0;
+        renderWorldBar(); renderListRowsOnly(kind);
+      });
+    $("f-linkback").addEventListener("click", () => {
+      let n = 0;
+      for (const d of DIRS) {
+        const t = e.exits[d] | 0;
+        const other = roomById(t);
+        if (other && (other.exits[OPPOSITE[d]] | 0) !== e.id) { other.exits[OPPOSITE[d]] = e.id; n++; }
+      }
+      toast(n ? "Added " + n + " return exit" + (n === 1 ? "" : "s") + "." : "Every exit already leads back.");
+      renderAll();
+    });
+  }
+  if (kind === "objects" || kind === "mobs") {
+    $("f-room").addEventListener("change", ev => {
+      e.roomID = parseInt(ev.target.value, 10) || 0;
+      renderWorldBar(); renderListRowsOnly(kind);
+    });
+  }
+  if (kind === "objects") {
+    FLAGS.forEach(f => $("f-flag-" + f).addEventListener("change", ev => { e.flags[f] = ev.target.checked; renderWorldBar(); }));
+    $("f-carried").addEventListener("change", ev => {
+      e.carriedBy = parseInt(ev.target.value, 10) || 0;
+      renderWorldBar(); renderListRowsOnly(kind);
+    });
+  }
+
+  $("f-delete").addEventListener("click", () => {
+    if (!confirm("Delete " + singular.toLowerCase() + " " + e.id + (e.name ? " (" + e.name + ")" : "") + "?")) return;
+    world[kind] = list.filter(x => x.id !== e.id);
+    sel[kind] = null;
+    renderAll();
+  });
+}
+
+// Redraw list labels without rebuilding the form (which would steal focus while typing)
+function renderListRowsOnly(kind) {
+  const ul = $("list" + kind[0].toUpperCase() + kind.slice(1));
+  const list = world[kind];
+  const rows = ul.querySelectorAll("li");
+  list.forEach((e, i) => {
+    const li = rows[i];
+    if (!li || !li.querySelector(".nm")) return;
+    li.querySelector(".id").textContent = e.id;
+    li.querySelector(".nm").textContent = e.name || "(unnamed)";
+    const tagEl = li.querySelector(".tag");
+    if (kind === "rooms") {
+      const n = DIRS.filter(d => e.exits[d]).length;
+      tagEl.textContent = n + (n === 1 ? " exit" : " exits") + (e.points ? " · +" + e.points : "");
+    } else if (kind === "objects") {
+      tagEl.textContent = (e.roomID ? "room " + e.roomID : e.carriedBy ? "mob " + e.carriedBy : "nowhere") +
+                          (e.points ? " · +" + e.points : "");
+    } else {
+      tagEl.textContent = "room " + e.roomID;
+    }
+  });
+}
+
+// Keep exits, placements and the win condition pointing at a renamed id
+function repointReferences(kind, oldId, newId) {
+  if (kind === "rooms") {
+    for (const r of world.rooms)
+      for (const d of DIRS) if ((r.exits[d] | 0) === oldId) r.exits[d] = newId;
+    for (const o of world.objects) if (o.roomID === oldId) o.roomID = newId;
+    for (const m of world.mobs) if (m.roomID === oldId) m.roomID = newId;
+    if (world.startRoom === oldId) world.startRoom = newId;
+    if (world.winRoomID === oldId) world.winRoomID = newId;
+  } else if (kind === "objects") {
+    if (world.winObjectID === oldId) world.winObjectID = newId;
+  } else if (kind === "mobs") {
+    for (const o of world.objects) if (o.carriedBy === oldId) o.carriedBy = newId;
+  }
+}
+
+function renderIssues() {
+  const box = $("issues");
+  const issues = validate();
+  if (!issues.length) {
+    box.innerHTML = '<p class="allclear">No problems found. This world should load and play.</p>';
+    return;
+  }
+  const order = { error: 0, warn: 1 };
+  issues.sort((a, b) => order[a.level] - order[b.level]);
+  box.innerHTML = issues.map(i =>
+    '<div class="issue ' + i.level + '"><div class="what">' + escapeHtml(i.what) + "</div>" +
+    '<div class="where">' + escapeHtml(i.where) + "</div></div>").join("");
+}
+
+/* ---- Events ------------------------------------------------------------ */
+document.querySelectorAll("nav button").forEach(b =>
+  b.addEventListener("click", () => showTab(b.dataset.tab)));
+
+$("wTitle").addEventListener("input", e => { world.title = e.target.value; renderWorldBar(); });
+["wStart", "wWinRoom", "wWinObj"].forEach(id =>
+  $(id).addEventListener("input", e => {
+    const v = Math.max(0, parseInt(e.target.value, 10) || 0);
+    if (id === "wStart") world.startRoom = v;
+    else if (id === "wWinRoom") world.winRoomID = v;
+    else world.winObjectID = v;
+    renderWorldBar();
+  }));
+
+$("addRoom").addEventListener("click", () => {
+  if (world.rooms.length >= LIM.ROOMS) return toast("The engine allows at most " + LIM.ROOMS + " rooms.", true);
+  const r = newRoom(nextId(world.rooms));
+  r.name = "New Room";
+  world.rooms.push(r); sel.rooms = r.id;
+  renderAll(); showTab("rooms"); $("f-name").select();
+});
+$("addObject").addEventListener("click", () => {
+  if (world.objects.length >= LIM.OBJECTS) return toast("The engine allows at most " + LIM.OBJECTS + " objects.", true);
+  const o = newObject(nextId(world.objects));
+  o.name = "New Object";
+  o.roomID = sel.rooms || (world.rooms[0] && world.rooms[0].id) || 0;
+  world.objects.push(o); sel.objects = o.id;
+  renderAll(); showTab("objects"); $("f-name").select();
+});
+$("addMob").addEventListener("click", () => {
+  if (world.mobs.length >= LIM.MOBS) return toast("The engine allows at most " + LIM.MOBS + " mobs.", true);
+  const m = newMob(nextId(world.mobs));
+  m.name = "New Character";
+  m.roomID = sel.rooms || (world.rooms[0] && world.rooms[0].id) || 0;
+  world.mobs.push(m); sel.mobs = m.id;
+  renderAll(); showTab("mobs"); $("f-name").select();
+});
+
+$("btnNew").addEventListener("click", () => {
+  if (world.rooms.length && !confirm("Discard the current world and start a new one?")) return;
+  world = blankWorld();
+  const r = newRoom(1);
+  r.name = "Starting Room";
+  r.desc = "You stand at the beginning of your adventure.";
+  world.rooms.push(r);
+  sel = { rooms: 1, objects: null, mobs: null };
+  game = null;
+  renderAll(); showTab("rooms");
+});
+
+$("btnOpen").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", async ev => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  try {
+    const buf = await file.arrayBuffer();
+    const loaded = parseWorldFile(buf, file.name);
+    if (!loaded.rooms.length) throw new Error("No rooms found in that file.");
+    world = loaded;
+    sel = { rooms: world.rooms[0].id, objects: null, mobs: null };
+    game = null;
+    renderAll(); showTab("rooms");
+    toast("Loaded " + file.name + " — " + world.rooms.length + " rooms.");
+  } catch (err) {
+    toast("Could not read that file: " + err.message, true);
+  }
+  ev.target.value = "";
+});
+
+const saveMenu = $("saveMenu"), btnSave = $("btnSave");
+btnSave.addEventListener("click", () => {
+  const open = saveMenu.hidden;
+  saveMenu.hidden = !open;
+  btnSave.setAttribute("aria-expanded", String(open));
+});
+document.addEventListener("click", e => {
+  if (!saveMenu.hidden && !saveMenu.contains(e.target) && e.target !== btnSave) {
+    saveMenu.hidden = true;
+    btnSave.setAttribute("aria-expanded", "false");
+  }
+});
+saveMenu.querySelectorAll("button").forEach(b =>
+  b.addEventListener("click", () => {
+    saveMenu.hidden = true;
+    btnSave.setAttribute("aria-expanded", "false");
+    const errs = validate().filter(i => i.level === "error");
+    if (errs.length && !confirm(errs.length + " problem" + (errs.length === 1 ? "" : "s") +
+        " found on the Check tab. Save anyway?")) return;
+    const fmt = b.dataset.fmt;
+    if (fmt === "bin") download("world.dat", writeBinary(), "application/octet-stream");
+    else if (fmt === "txt") download("world.txt", writeText(), "text/plain");
+    else download("world.bpl", writeBPL(), "text/plain");
+    toast("Saved " + (fmt === "bin" ? "world.dat" : fmt === "txt" ? "world.txt" : "world.bpl") + ".");
+  }));
+
+$("cmdForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = $("cmdInput");
+  const text = input.value;
+  if (!game || game.over) return;
+  say("> " + text, "cmd");
+  runCommand(text);
+  input.value = "";
+});
+$("btnRestart").addEventListener("click", () => { startGame(); $("cmdInput").focus(); });
+
+// Drag and drop a world file anywhere on the page
+document.addEventListener("dragover", e => { e.preventDefault(); });
+document.addEventListener("drop", async e => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  try {
+    const loaded = parseWorldFile(await file.arrayBuffer(), file.name);
+    if (!loaded.rooms.length) throw new Error("No rooms found in that file.");
+    world = loaded;
+    sel = { rooms: world.rooms[0].id, objects: null, mobs: null };
+    game = null;
+    renderAll(); showTab("rooms");
+    toast("Loaded " + file.name + " — " + world.rooms.length + " rooms.");
+  } catch (err) {
+    toast("Could not read that file: " + err.message, true);
+  }
+});
+
+/* ---- Boot -------------------------------------------------------------- */
+(function boot() {
+  const r = newRoom(1);
+  r.name = "Starting Room";
+  r.desc = "You stand at the beginning of your adventure.";
+  world.rooms.push(r);
+  sel.rooms = 1;
+  renderAll();
+})();
+</script>
+</body>
+</html>

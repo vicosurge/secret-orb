@@ -222,7 +222,22 @@ The editor provides a menu-driven interface to:
 - Add/edit/delete rooms with descriptions and exits
 - Create objects with properties (pickup, use, open, read)
 - Add NPCs (mobs) with dialogue
+- Set the win condition and per-room/per-object points
 - Save worlds to `.dat` files
+
+#### Using the Web Editor
+
+For building worlds on a modern machine there is a browser-based editor at
+[**secret-orb.digimente.xyz/web/editor.html**](https://secret-orb.digimente.xyz/web/editor.html).
+It is a single self-contained HTML file — no install, no build step, nothing sent
+anywhere — so `web/editor.html` also works if you just open it from disk.
+
+It covers the same world data as the Pascal editors, plus:
+- Open an existing world by picking a file or dropping it on the page
+- An auto-laid-out map of your rooms, with unreachable rooms flagged
+- A validation pass for broken exits, dangling references and unwinnable worlds
+- An in-browser playtest that mirrors the Pascal engine's rules
+- Save as binary `.dat`, text `.txt` or `.bpl`
 
 #### Manual Editing
 
