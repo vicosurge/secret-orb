@@ -1,4 +1,4 @@
-{ bplparser.pas - BPL (Bracket Programming Language) parser for Secret Orb }
+{ bplpars.pas - BPL (Bracket Programming Language) parser for Secret Orb }
 { Parses .bpl files and populates TGameWorld structures }
 unit BPLPars;
 
@@ -11,7 +11,7 @@ uses
   SysUtils, GameData;
 
 const
-  BPL_REVISION = 1;
+  BPL_REVISION = 2;   { Revision 1 files still load; new tags default to 0 }
   MAX_BPL_ERRORS = 50;
 
 type
@@ -175,6 +175,14 @@ begin
       Result[I] := Chr(Ord(Result[I]) - 32);
 end;
 
+{ START is overloaded: it opens a block, as in START:ROOM, and inside a WORLD
+  block it also names the starting room, as in START:R1. Only the block-type
+  spelling opens a block. }
+function IsBlockType(const S: string): Boolean;
+begin
+  Result := (S = 'WORLD') or (S = 'ROOM') or (S = 'OBJECT') or (S = 'MOB');
+end;
+
 { Parse a single BPL tag {KEY:VALUE} }
 function ParseTag(const Tag: string; var Key, Value: string): Boolean;
 var
@@ -292,6 +300,7 @@ var
   TempRoomID, TempCarriedBy: string;
   TempFlags: TObjectFlags;
   TempUseText, TempDialogue: string;
+  TempPoints: Word;
   TempExits: array[TDirection] of string;
   Dir: TDirection;
 begin
@@ -358,7 +367,8 @@ begin
     { Process tags }
     for I := 1 to TagCount do
     begin
-      if Tags[I].Key = 'START' then
+      if (Tags[I].Key = 'START') and
+         ((not InBlock) or IsBlockType(UpperStr(Tags[I].Value))) then
       begin
         if InBlock then
           AddError(GlobalParser, beMissingEnd, 'Missing END before new START')
@@ -376,6 +386,7 @@ begin
           TempFlags := [];
           TempUseText := '';
           TempDialogue := '';
+          TempPoints := 0;
           for Dir := Low(TDirection) to High(TDirection) do
             TempExits[Dir] := '0';
         end;
@@ -402,6 +413,7 @@ begin
                 W.Rooms[CurrentRoom].ID := TempOC;
                 W.Rooms[CurrentRoom].Name := TempName;
                 W.Rooms[CurrentRoom].Desc := TempDesc;
+                W.Rooms[CurrentRoom].Points := TempPoints;
                 W.Rooms[CurrentRoom].Active := True;
                 { Store exit VARs temporarily - resolve in second pass }
                 for Dir := Low(TDirection) to High(TDirection) do
@@ -425,6 +437,7 @@ begin
                 W.Objects[CurrentObject].CarriedBy := StrToIntDef(TempCarriedBy, 0);
                 W.Objects[CurrentObject].Flags := TempFlags;
                 W.Objects[CurrentObject].UseText := TempUseText;
+                W.Objects[CurrentObject].Points := TempPoints;
                 W.Objects[CurrentObject].Active := True;
                 RegisterVAR(GlobalParser, TempVAR, 'O', TempOC);
               end;
@@ -473,6 +486,12 @@ begin
           if BlockType = 'WORLD' then
             W.CurrentRoom := StrToIntDef(Copy(Tags[I].Value, 2, Length(Tags[I].Value)-1), 1);
         end
+        else if Tags[I].Key = 'WINROOM' then
+          W.WinRoomID := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'WINOBJ' then
+          W.WinObjectID := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'POINTS' then
+          TempPoints := StrToIntDef(Tags[I].Value, 0)
         else if Tags[I].Key = 'ROOM' then
           TempRoomID := Tags[I].Value
         else if Tags[I].Key = 'CARRIEDBY' then
@@ -532,6 +551,7 @@ begin
     end;
   end;
 
+  W.MaxScore := ComputeMaxScore(W);
   Result := (W.RoomCount > 0) and (GlobalParser.ErrorCount = 0);
 end;
 
@@ -589,6 +609,8 @@ begin
   { Write WORLD block }
   WriteLn(F, '{START:WORLD}');
   WriteLn(F, '{REVISION:', BPL_REVISION, '}{TITLE:', W.Title, '}{START:R', W.CurrentRoom, '}');
+  if (W.WinRoomID > 0) or (W.WinObjectID > 0) then
+    WriteLn(F, '{WINROOM:', W.WinRoomID, '}{WINOBJ:', W.WinObjectID, '}');
   WriteLn(F, '{END}');
   WriteLn(F);
 
@@ -607,6 +629,8 @@ begin
               '}{WEST:', W.Rooms[I].Exits[dirWest],
               '}{UP:', W.Rooms[I].Exits[dirUp],
               '}{DOWN:', W.Rooms[I].Exits[dirDown], '}');
+      if W.Rooms[I].Points > 0 then
+        WriteLn(F, '{POINTS:', W.Rooms[I].Points, '}');
       WriteLn(F, '{END}');
       WriteLn(F);
     end;
@@ -630,6 +654,8 @@ begin
       WriteLn(F, '+++');
       if W.Objects[I].UseText <> '' then
         WriteLn(F, '{USETEXT:', W.Objects[I].UseText, '}');
+      if W.Objects[I].Points > 0 then
+        WriteLn(F, '{POINTS:', W.Objects[I].Points, '}');
       WriteLn(F, '{END}');
       WriteLn(F);
     end;

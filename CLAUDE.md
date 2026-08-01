@@ -77,9 +77,19 @@ The codebase is organized into modular units in `pascal/src/`:
   - 80x25 character screen assumed
 
 - **gamecore.pas**: Game engine and command processing
-  - Command parser: converts player input to `TCommandType` enum
-  - Command handlers: movement, examine, take, drop, use, open, read, talk, inventory
+  - Command parser: converts player input to `TCommandType` enum. Only the verb is
+    upper-cased; the noun keeps its typed case so `SAVE`/`LOAD` file names survive
+    on case-sensitive filesystems
+  - Command handlers: movement, examine, take, drop, use, open, read, talk,
+    inventory, save, load, score
   - Game loop: `RunGame` function drives the main gameplay
+  - `ShowRoom` records the row it drew the `>` prompt on in `TGame.PromptY`, which
+    `RunGame` uses to position input
+  - Scoring and endings: rooms and objects carry `Points`, awarded once on first
+    visit / first take (tracked by `World.Visited` and `World.Taken`). The game is
+    won by reaching `WinRoomID` while carrying `WinObjectID`; either may be 0 to
+    disable that half of the condition. Meta commands (help, score, save, load,
+    quit) do not consume a turn
 
 ### Program Entry Points
 
@@ -100,15 +110,30 @@ World files support two formats with automatic detection:
 
 #### Binary Format (Default)
 
-The editor saves in binary format by default for space efficiency. Structure:
+The editor saves in binary format by default for space efficiency. Current version
+is **2**; version 1 files still load, with the new fields defaulting to 0 and the
+title derived from the file name. Saves always write version 2.
 
-- **Header (16 bytes)**: Magic signature 'SORB', version, counts, start room
-- **Rooms**: Packed TRoomBin records (313 bytes each)
-  - Supports 6 directions: North, South, East, West, Up, Down
-- **Objects**: Packed TGameObjectBin records (242 bytes)
-- **Mobs**: Packed TMobBin records (339 bytes)
+- **Header**: Magic signature 'SORB', version, counts, start room, title,
+  win room ID, win object ID, max score
+- **Rooms**: Packed TRoomBinV2 records — 6 directions plus first-visit `Points`
+- **Objects**: Packed TGameObjectBinV2 records — plus first-take `Points`
+- **Mobs**: Packed TMobBinV2 records
 
-Format validation: Magic signature check, version verification, IOResult error handling.
+The loader reads the 4-byte magic and version prefix *first*, then dispatches to a
+version-specific header layout. A version 1 file is shorter than a version 2 header,
+so the layout must be chosen before reading any further.
+
+Format validation: Magic signature check, version dispatch, IOResult error handling.
+
+#### Save Games
+
+Save games are a separate file format from world files: magic 'SORS', version 1,
+written by `SaveGameState` / read by `LoadGameState` in datafile.pas. A save stores
+position, score, turns, inventory, object and mob placement, and the visited/taken
+bitmaps — but no world definition. The header carries a `WorldSig` fingerprint of the
+world; restoring a save whose signature does not match, or whose body length is wrong,
+is refused outright rather than half-applied.
 
 #### Text Format (Legacy/Manual Editing)
 
@@ -118,6 +143,8 @@ Text-based INI-style format, still fully supported for loading:
 [WORLD]
 TITLE=Game Title
 START=1
+WINROOM=room_id
+WINOBJECT=object_id
 
 [ROOM:id]
 NAME=Room Name
@@ -128,6 +155,7 @@ EAST=room_id
 WEST=room_id
 UP=room_id
 DOWN=room_id
+POINTS=score awarded on first visit
 
 [OBJECT:id]
 NAME=Object Name
@@ -136,6 +164,7 @@ ROOM=room_id
 CARRIEDBY=mob_id
 FLAGS=pickup,use,open,read
 USETEXT=Text shown when used
+POINTS=score awarded on first take
 
 [MOB:id]
 NAME=Mob Name
@@ -206,6 +235,14 @@ make native      # Builds secretorb + lightweight editor
 make editor-tv   # Builds Turbo Vision editor only
 make editors     # Builds both editors
 ```
+
+There is also **web/editor.html**: a single self-contained HTML file (no build step,
+no dependencies, no network access) served from the project site at
+`/web/editor.html`. It reads and writes all three world formats, so its byte layout
+for binary v2 must stay in step with the packed records in `datafile.pas` — the
+record sizes and field offsets are written down in comments next to its
+`writeBinary` function. It also carries a browser copy of the engine's command
+handling for playtesting, which mirrors `gamecore.pas`.
 
 The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provides:
 - Menu bar with keyboard shortcuts (F2 Save, F3 Open, Alt+X Exit)
@@ -627,10 +664,14 @@ end;
 ## Data Format Version
 
 When implementing these features, increment the binary format version:
-- Current: Version 1 (basic rooms, objects, mobs)
-- Version 2: Add events, flags, counters
-- Version 3: Add dialogue trees
-- Version 4: Add object states, containers, combinations
+- Version 1: basic rooms, objects, mobs
+- Version 2 (current): world title, win condition, per-room and per-object points
+- Version 3: Add events, flags, counters
+- Version 4: Add dialogue trees
+- Version 5: Add object states, containers, combinations
+
+BPL carries the same fields via `{WINROOM:n}` and `{WINOBJ:n}` in the WORLD block and
+`{POINTS:n}` in ROOM/OBJECT blocks, at `{REVISION:2}`; revision 1 files still load.
 
 Maintain backward compatibility: newer engine loads older formats, fills defaults.
 

@@ -23,16 +23,21 @@ type
     cmdOpen,
     cmdRead,
     cmdTalk,
-    cmdInventory
+    cmdInventory,
+    cmdSave,
+    cmdLoad,
+    cmdScore
   );
 
-  TGameState = (gsPlaying, gsQuit);
+  TGameState = (gsPlaying, gsQuit, gsWon);
 
   TGame = record
     World: TGameWorld;
     State: TGameState;
     LastMessage: string;
     LastNoun: string[40];
+    PromptY: Integer;       { Set by ShowRoom so input lands on the drawn prompt }
+    SaveFile: string;
   end;
 
 procedure InitGame(var G: TGame);
@@ -50,6 +55,12 @@ procedure HandleOpen(var G: TGame; const Noun: string);
 procedure HandleRead(var G: TGame; const Noun: string);
 procedure HandleTalk(var G: TGame; const Noun: string);
 procedure HandleInventory(var G: TGame);
+procedure HandleSave(var G: TGame; const Noun: string);
+procedure HandleLoad(var G: TGame; const Noun: string);
+procedure HandleScore(var G: TGame);
+
+const
+  DEFAULT_SAVE = 'SAVE.DAT';   { 8.3 so it works on DOS }
 
 implementation
 
@@ -59,6 +70,8 @@ begin
   G.State := gsPlaying;
   G.LastMessage := '';
   G.LastNoun := '';
+  G.PromptY := 14;
+  G.SaveFile := DEFAULT_SAVE;
 end;
 
 function LoadGame(var G: TGame; const FileName: string): Boolean;
@@ -72,17 +85,18 @@ var
   Cmd, FullCmd: string;
   SpacePos: Integer;
 begin
-  FullCmd := UpperCase(Trim(Input));
+  FullCmd := Trim(Input);
   Noun := '';
 
-  { Find first word }
+  { Find first word. Only the verb is upper-cased - the noun keeps the case it
+    was typed in, because SAVE and LOAD take a file name. }
   SpacePos := Pos(' ', FullCmd);
   if SpacePos > 0 then
   begin
-    Cmd := Copy(FullCmd, 1, SpacePos - 1);
+    Cmd := UpperCase(Copy(FullCmd, 1, SpacePos - 1));
     Noun := Trim(Copy(FullCmd, SpacePos + 1, Length(FullCmd)));
     { Handle "LOOK AT" as EXAMINE }
-    if (Cmd = 'LOOK') and (Pos('AT ', Noun) = 1) then
+    if (Cmd = 'LOOK') and (Pos('AT ', UpperCase(Noun)) = 1) then
     begin
       Noun := Trim(Copy(Noun, 4, Length(Noun)));
       Result := cmdExamine;
@@ -90,7 +104,7 @@ begin
     end;
   end
   else
-    Cmd := FullCmd;
+    Cmd := UpperCase(FullCmd);
 
   if (Cmd = 'N') or (Cmd = 'NORTH') then
     Result := cmdNorth
@@ -126,6 +140,12 @@ begin
     Result := cmdTalk
   else if (Cmd = 'I') or (Cmd = 'INV') or (Cmd = 'INVENTORY') then
     Result := cmdInventory
+  else if Cmd = 'SAVE' then
+    Result := cmdSave
+  else if (Cmd = 'LOAD') or (Cmd = 'RESTORE') then
+    Result := cmdLoad
+  else if Cmd = 'SCORE' then
+    Result := cmdScore
   else if Cmd = '' then
     Result := cmdNone
   else
@@ -170,6 +190,56 @@ begin
 
   G.World.CurrentRoom := TargetID;
   G.LastMessage := 'You go ' + GetExitName(Dir) + '.';
+
+  { Award first-visit points once }
+  if not G.World.Visited[TargetIdx] then
+  begin
+    G.World.Visited[TargetIdx] := True;
+    if G.World.Rooms[TargetIdx].Points > 0 then
+    begin
+      Inc(G.World.Score, G.World.Rooms[TargetIdx].Points);
+      G.LastMessage := G.LastMessage + ' [+' +
+                       IntToStr(G.World.Rooms[TargetIdx].Points) + ']';
+    end;
+  end;
+end;
+
+{ The world is won by reaching WinRoomID, optionally while carrying WinObjectID }
+procedure CheckWinCondition(var G: TGame);
+begin
+  if G.World.WinRoomID = 0 then Exit;
+  if G.World.CurrentRoom <> G.World.WinRoomID then Exit;
+  if (G.World.WinObjectID <> 0) and
+     not PlayerHasObject(G.World, G.World.WinObjectID) then Exit;
+  G.State := gsWon;
+end;
+
+procedure HandleScore(var G: TGame);
+begin
+  G.LastMessage := 'Score: ' + IntToStr(G.World.Score);
+  if G.World.MaxScore > 0 then
+    G.LastMessage := G.LastMessage + ' of ' + IntToStr(G.World.MaxScore);
+  G.LastMessage := G.LastMessage + '   Turns: ' + IntToStr(G.World.Turns);
+end;
+
+procedure HandleSave(var G: TGame; const Noun: string);
+begin
+  if Noun <> '' then
+    G.SaveFile := Noun;
+  if SaveGameState(G.SaveFile, G.World) then
+    G.LastMessage := 'Game saved to ' + G.SaveFile + '.'
+  else
+    G.LastMessage := 'Could not save to ' + G.SaveFile + '.';
+end;
+
+procedure HandleLoad(var G: TGame; const Noun: string);
+begin
+  if Noun <> '' then
+    G.SaveFile := Noun;
+  if LoadGameState(G.SaveFile, G.World) then
+    G.LastMessage := 'Game restored from ' + G.SaveFile + '.'
+  else
+    G.LastMessage := 'No usable save found in ' + G.SaveFile + '.';
 end;
 
 procedure ExecuteCommand(var G: TGame; Cmd: TCommandType);
@@ -192,9 +262,23 @@ begin
     cmdRead: HandleRead(G, G.LastNoun);
     cmdTalk: HandleTalk(G, G.LastNoun);
     cmdInventory: HandleInventory(G);
+    cmdSave: HandleSave(G, G.LastNoun);
+    cmdLoad: HandleLoad(G, G.LastNoun);
+    cmdScore: HandleScore(G);
     cmdUnknown: G.LastMessage := 'I don''t understand that command.';
     cmdNone: ; { Do nothing }
   end;
+
+  { Only commands that act on the world consume a turn - asking for the score or
+    saving the game should not inflate the turn count }
+  case Cmd of
+    cmdNone, cmdUnknown, cmdHelp, cmdScore, cmdSave, cmdLoad, cmdQuit: ;
+  else
+    Inc(G.World.Turns);
+  end;
+
+  if G.State = gsPlaying then
+    CheckWinCondition(G);
 end;
 
 procedure ShowRoom(var G: TGame);
@@ -211,6 +295,8 @@ begin
   if Idx < 0 then
   begin
     WriteAt(1, 1, 'ERROR: Room not found!');
+    WriteAt(1, 3, '> ');
+    G.PromptY := 3;
     Exit;
   end;
 
@@ -290,8 +376,11 @@ begin
     Inc(CurrentY, 2);
   end;
 
-  { Command prompt }
+  { Command prompt - remember where it landed so RunGame reads input there }
+  if CurrentY > SCREEN_HEIGHT then
+    CurrentY := SCREEN_HEIGHT;
   WriteAt(1, CurrentY, '> ');
+  G.PromptY := CurrentY;
 end;
 
 procedure ShowHelp;
@@ -301,6 +390,7 @@ begin
   WriteCenter(2, '=== HELP ===');
   ResetColor;
 
+  { Two columns, so everything fits within the 25 available lines }
   WriteAt(3, 4, 'Movement:');
   WriteAt(5, 5, 'N, NORTH  - Go north');
   WriteAt(5, 6, 'S, SOUTH  - Go south');
@@ -319,13 +409,19 @@ begin
   WriteAt(5, 19, 'TALK <person>    - Talk to someone');
   WriteAt(5, 20, 'I, INVENTORY     - Show inventory');
 
-  WriteAt(3, 22, 'Other:');
-  WriteAt(5, 23, 'L, LOOK   - Look around');
-  WriteAt(5, 24, 'H, HELP   - Show this help');
-  WriteAt(5, 25, 'Q, QUIT   - Quit the game');
+  WriteAt(43, 4, 'Other:');
+  WriteAt(45, 5, 'L, LOOK   - Look around');
+  WriteAt(45, 6, 'H, HELP   - Show this help');
+  WriteAt(45, 7, 'Q, QUIT   - Quit the game');
+
+  WriteAt(43, 9, 'Progress:');
+  WriteAt(45, 10, 'SCORE     - Show score and turns');
+  WriteAt(45, 11, 'SAVE [file]    - Save your game');
+  WriteAt(45, 12, 'LOAD [file]    - Restore a game');
+  WriteAt(45, 14, 'Default save file: ' + DEFAULT_SAVE);
 
   SetColor(Cyan, Black);
-  WriteCenter(26, 'Press any key to continue...');
+  WriteCenter(24, 'Press any key to continue...');
   ResetColor;
   WaitKey;
 end;
@@ -340,16 +436,8 @@ begin
     Exit;
   end;
 
-  { Check objects in room first }
-  ObjIdx := FindObjectByName(G.World, G.World.CurrentRoom, Noun);
-  if ObjIdx > 0 then
-  begin
-    G.LastMessage := G.World.Objects[ObjIdx].Desc;
-    Exit;
-  end;
-
-  { Check player inventory }
-  ObjIdx := FindObjectByName(G.World, 0, Noun);
+  { Anything in the room or in hand }
+  ObjIdx := FindObjectVisible(G.World, G.World.CurrentRoom, Noun);
   if ObjIdx > 0 then
   begin
     G.LastMessage := G.World.Objects[ObjIdx].Desc;
@@ -369,7 +457,7 @@ end;
 
 procedure HandleTake(var G: TGame; const Noun: string);
 var
-  ObjIdx, I: Integer;
+  ObjIdx: Integer;
 begin
   if Noun = '' then
   begin
@@ -377,10 +465,14 @@ begin
     Exit;
   end;
 
-  ObjIdx := FindObjectByName(G.World, G.World.CurrentRoom, Noun);
+  { Room only - an item already in hand must not be taken a second time }
+  ObjIdx := FindObjectInRoom(G.World, G.World.CurrentRoom, Noun);
   if ObjIdx < 0 then
   begin
-    G.LastMessage := 'You don''t see that here.';
+    if FindObjectInInventory(G.World, Noun) > 0 then
+      G.LastMessage := 'You already have that.'
+    else
+      G.LastMessage := 'You don''t see that here.';
     Exit;
   end;
 
@@ -403,6 +495,18 @@ begin
   G.World.Objects[ObjIdx].CarriedBy := 0;
 
   G.LastMessage := 'You take the ' + G.World.Objects[ObjIdx].Name + '.';
+
+  { Award points on the first take only, so drop-and-retake cannot farm score }
+  if not G.World.Taken[ObjIdx] then
+  begin
+    G.World.Taken[ObjIdx] := True;
+    if G.World.Objects[ObjIdx].Points > 0 then
+    begin
+      Inc(G.World.Score, G.World.Objects[ObjIdx].Points);
+      G.LastMessage := G.LastMessage + ' [+' +
+                       IntToStr(G.World.Objects[ObjIdx].Points) + ']';
+    end;
+  end;
 end;
 
 procedure HandleDrop(var G: TGame; const Noun: string);
@@ -416,7 +520,7 @@ begin
   end;
 
   { Find in inventory }
-  ObjIdx := FindObjectByName(G.World, 0, Noun);
+  ObjIdx := FindObjectInInventory(G.World, Noun);
   if ObjIdx < 0 then
   begin
     G.LastMessage := 'You don''t have that.';
@@ -462,9 +566,7 @@ begin
   end;
 
   { Check room and inventory }
-  ObjIdx := FindObjectByName(G.World, G.World.CurrentRoom, Noun);
-  if ObjIdx < 0 then
-    ObjIdx := FindObjectByName(G.World, 0, Noun);
+  ObjIdx := FindObjectVisible(G.World, G.World.CurrentRoom, Noun);
 
   if ObjIdx < 0 then
   begin
@@ -494,9 +596,7 @@ begin
     Exit;
   end;
 
-  ObjIdx := FindObjectByName(G.World, G.World.CurrentRoom, Noun);
-  if ObjIdx < 0 then
-    ObjIdx := FindObjectByName(G.World, 0, Noun);
+  ObjIdx := FindObjectVisible(G.World, G.World.CurrentRoom, Noun);
 
   if ObjIdx < 0 then
   begin
@@ -526,9 +626,7 @@ begin
     Exit;
   end;
 
-  ObjIdx := FindObjectByName(G.World, G.World.CurrentRoom, Noun);
-  if ObjIdx < 0 then
-    ObjIdx := FindObjectByName(G.World, 0, Noun);
+  ObjIdx := FindObjectVisible(G.World, G.World.CurrentRoom, Noun);
 
   if ObjIdx < 0 then
   begin
@@ -603,23 +701,51 @@ begin
   G.LastMessage := InvList;
 end;
 
+procedure ShowEnding(var G: TGame);
+begin
+  ClearScreen;
+  SetColor(Yellow, Black);
+  WriteCenter(8, '*** YOU HAVE WON ***');
+  ResetColor;
+  WriteCenter(10, G.World.Title);
+  if G.World.MaxScore > 0 then
+    WriteCenter(12, 'Final score: ' + IntToStr(G.World.Score) + ' of ' +
+                    IntToStr(G.World.MaxScore))
+  else
+    WriteCenter(12, 'Final score: ' + IntToStr(G.World.Score));
+  WriteCenter(13, 'Turns taken: ' + IntToStr(G.World.Turns));
+  SetColor(Cyan, Black);
+  WriteCenter(16, 'Press any key to continue...');
+  ResetColor;
+  WaitKey;
+end;
+
 procedure RunGame(var G: TGame);
 var
   Input: string;
   Cmd: TCommandType;
-  PromptY: Integer;
+  StartIdx: Integer;
 begin
   InitDisplay;
+
+  { The starting room counts as visited, and scores like any other }
+  StartIdx := FindRoomByID(G.World, G.World.CurrentRoom);
+  if (StartIdx > 0) and not G.World.Visited[StartIdx] then
+  begin
+    G.World.Visited[StartIdx] := True;
+    Inc(G.World.Score, G.World.Rooms[StartIdx].Points);
+  end;
 
   while G.State = gsPlaying do
   begin
     ShowRoom(G);
-    { Find prompt position - scan for '>' }
-    PromptY := 14;
-    Input := ReadLine(3, PromptY, 60);
+    Input := ReadLine(3, G.PromptY, 60);
     Cmd := ParseCommand(Input, G.LastNoun);
     ExecuteCommand(G, Cmd);
   end;
+
+  if G.State = gsWon then
+    ShowEnding(G);
 
   ClearScreen;
   WriteCenter(12, 'Thanks for playing!');

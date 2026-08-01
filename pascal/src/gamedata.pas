@@ -25,6 +25,7 @@ type
     Name: string[MAX_NAME_LEN];
     Desc: string[MAX_DESC_LEN];
     Exits: array[TDirection] of Word;
+    Points: Word;           { Awarded on first visit }
     Active: Boolean;
   end;
 
@@ -41,6 +42,7 @@ type
     CarriedBy: Word;        { 0 = room/player, else mob ID }
     Flags: TObjectFlags;
     UseText: string[MAX_OBJ_DESC];
+    Points: Word;           { Awarded on first take }
     Active: Boolean;
   end;
 
@@ -54,6 +56,8 @@ type
   end;
 
   TInventory = array[1..MAX_INVENTORY] of Word;
+  TVisitedArray = array[1..MAX_ROOMS] of Boolean;
+  TTakenArray = array[1..MAX_OBJECTS] of Boolean;
 
   TGameWorld = record
     Rooms: TRoomArray;
@@ -66,6 +70,15 @@ type
     MobCount: Word;
     PlayerInventory: TInventory;
     PlayerInvCount: Byte;
+    { World definition: how the adventure is won }
+    WinRoomID: Word;        { 0 = world has no ending }
+    WinObjectID: Word;      { 0 = reaching WinRoomID is enough }
+    MaxScore: Word;         { Sum of all room and object points }
+    { Player progress }
+    Score: Word;
+    Turns: Word;
+    Visited: TVisitedArray;   { By room array index, not room ID }
+    Taken: TTakenArray;       { By object array index - points award once only }
   end;
 
 procedure InitRoom(var R: TRoom);
@@ -77,8 +90,12 @@ function ParseDirection(const S: string): TDirection;
 function DirectionValid(Dir: TDirection): Boolean;
 function FindObjectByID(var W: TGameWorld; ID: Word): Integer;
 function FindMobByID(var W: TGameWorld; ID: Word): Integer;
-function FindObjectByName(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
+function FindObjectInRoom(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
+function FindObjectInInventory(var W: TGameWorld; const Name: string): Integer;
+function FindObjectVisible(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
 function FindMobByName(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
+function PlayerHasObject(var W: TGameWorld; ID: Word): Boolean;
+function ComputeMaxScore(var W: TGameWorld): Word;
 
 implementation
 
@@ -91,6 +108,7 @@ begin
   R.Desc := '';
   for D := Low(TDirection) to High(TDirection) do
     R.Exits[D] := DIR_NONE;
+  R.Points := 0;
   R.Active := False;
 end;
 
@@ -103,6 +121,7 @@ begin
   O.CarriedBy := 0;
   O.Flags := [];
   O.UseText := '';
+  O.Points := 0;
   O.Active := False;
 end;
 
@@ -134,6 +153,15 @@ begin
   W.PlayerInvCount := 0;
   for I := 1 to MAX_INVENTORY do
     W.PlayerInventory[I] := 0;
+  W.WinRoomID := 0;
+  W.WinObjectID := 0;
+  W.MaxScore := 0;
+  W.Score := 0;
+  W.Turns := 0;
+  for I := 1 to MAX_ROOMS do
+    W.Visited[I] := False;
+  for I := 1 to MAX_OBJECTS do
+    W.Taken[I] := False;
 end;
 
 function GetExitName(Dir: TDirection): string;
@@ -155,7 +183,9 @@ var
   U: string;
 begin
   U := UpCase(S);
-  if (U = 'U') or (U = 'UP') then
+  if U = '' then
+    Result := dirNorth
+  else if (U = 'U') or (U = 'UP') then
     Result := dirUp
   else if (U = 'D') or (U = 'DOWN') then
     Result := dirDown
@@ -211,26 +241,81 @@ begin
       Result[I] := Chr(Ord(Result[I]) - 32);
 end;
 
-function FindObjectByName(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
+{ Objects lying loose in a specific room - not carried by anyone }
+function FindObjectInRoom(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
 var
   I: Integer;
-  SearchName, ObjName: string;
+  SearchName: string;
 begin
   Result := -1;
   SearchName := StrUpper(Name);
   for I := 1 to MAX_OBJECTS do
-    if W.Objects[I].Active then
+    if W.Objects[I].Active and
+       (W.Objects[I].RoomID = RoomID) and (W.Objects[I].CarriedBy = 0) then
+      if Pos(SearchName, StrUpper(W.Objects[I].Name)) > 0 then
+      begin
+        Result := I;
+        Exit;
+      end;
+end;
+
+{ Walks the actual inventory slots, so objects merely stranded at RoomID 0
+  are not reachable }
+function FindObjectInInventory(var W: TGameWorld; const Name: string): Integer;
+var
+  I, Idx: Integer;
+  SearchName: string;
+begin
+  Result := -1;
+  SearchName := StrUpper(Name);
+  for I := 1 to W.PlayerInvCount do
+  begin
+    Idx := FindObjectByID(W, W.PlayerInventory[I]);
+    if Idx > 0 then
+      if Pos(SearchName, StrUpper(W.Objects[Idx].Name)) > 0 then
+      begin
+        Result := Idx;
+        Exit;
+      end;
+  end;
+end;
+
+{ Anything the player can refer to: the room first, then what they carry }
+function FindObjectVisible(var W: TGameWorld; RoomID: Word; const Name: string): Integer;
+begin
+  Result := FindObjectInRoom(W, RoomID, Name);
+  if Result < 0 then
+    Result := FindObjectInInventory(W, Name);
+end;
+
+function PlayerHasObject(var W: TGameWorld; ID: Word): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to W.PlayerInvCount do
+    if W.PlayerInventory[I] = ID then
     begin
-      ObjName := StrUpper(W.Objects[I].Name);
-      { Match if object is in room or player inventory }
-      if ((W.Objects[I].RoomID = RoomID) and (W.Objects[I].CarriedBy = 0)) or
-         ((W.Objects[I].RoomID = 0) and (W.Objects[I].CarriedBy = 0)) then
-        if Pos(SearchName, ObjName) > 0 then
-        begin
-          Result := I;
-          Exit;
-        end;
+      Result := True;
+      Exit;
     end;
+end;
+
+function ComputeMaxScore(var W: TGameWorld): Word;
+var
+  I: Integer;
+  Total: LongInt;
+begin
+  Total := 0;
+  for I := 1 to MAX_ROOMS do
+    if W.Rooms[I].Active then
+      Total := Total + W.Rooms[I].Points;
+  for I := 1 to MAX_OBJECTS do
+    if W.Objects[I].Active then
+      Total := Total + W.Objects[I].Points;
+  if Total > High(Word) then
+    Total := High(Word);
+  Result := Word(Total);
 end;
 
 function FindMobByName(var W: TGameWorld; RoomID: Word; const Name: string): Integer;

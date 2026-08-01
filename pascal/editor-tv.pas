@@ -581,10 +581,12 @@ var
   R: TRect;
   NameField, DescField: PInputLine;
   NorthField, SouthField, EastField, WestField, UpField, DownField: PInputLine;
+  PointsField: PInputLine;
   Control: Word;
   Room: TRoom;
   RoomName, RoomDesc: string;
   NorthStr, SouthStr, EastStr, WestStr, UpStr, DownStr: string;
+  PointsStr: string;
   ZeroStr: string;
 begin
   ZeroStr := '0';
@@ -661,6 +663,17 @@ begin
     DownField^.SetData(ZeroStr);
     Insert(DownField);
 
+    { Score awarded on first visit }
+    R.Assign(32, 7, 44, 8);
+    Insert(New(PStaticText, Init(R, 'Points:')));
+    R.Assign(45, 7, 55, 8);
+    PointsField := New(PInputLine, Init(R, 5));
+    PointsField^.SetData(ZeroStr);
+    Insert(PointsField);
+
+    R.Assign(32, 9, 66, 10);
+    Insert(New(PStaticText, Init(R, 'Scored on first visit only.')));
+
     { Buttons }
     R.Assign(20, 19, 30, 21);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -705,6 +718,10 @@ begin
     Room.Exits[dirUp] := StrToIntDef(UpStr, 0);
     Room.Exits[dirDown] := StrToIntDef(DownStr, 0);
 
+    PointsStr := '';
+    PointsField^.GetData(PointsStr);
+    Room.Points := StrToIntDef(PointsStr, 0);
+
     { Add room to world }
     Inc(World.RoomCount);
     World.Rooms[World.RoomCount] := Room;
@@ -722,10 +739,12 @@ var
   R: TRect;
   NameField, DescField: PInputLine;
   NorthField, SouthField, EastField, WestField, UpField, DownField: PInputLine;
+  PointsField: PInputLine;
   Control: Word;
   Room: TRoom;
   RoomName, RoomDesc: string;
   NorthStr, SouthStr, EastStr, WestStr, UpStr, DownStr: string;
+  PointsStr: string;
 begin
   if (Index < 1) or (Index > MAX_ROOMS) or (not World.Rooms[Index].Active) then
     Exit;
@@ -735,6 +754,7 @@ begin
   { Initialize string variables for SetData }
   RoomName := Room.Name;
   RoomDesc := Room.Desc;
+  PointsStr := IntToStr(Room.Points);
   NorthStr := IntToStr(Room.Exits[dirNorth]);
   SouthStr := IntToStr(Room.Exits[dirSouth]);
   EastStr := IntToStr(Room.Exits[dirEast]);
@@ -807,6 +827,17 @@ begin
     DownField^.SetData(DownStr);
     Insert(DownField);
 
+    { Score awarded on first visit }
+    R.Assign(32, 7, 44, 8);
+    Insert(New(PStaticText, Init(R, 'Points:')));
+    R.Assign(45, 7, 55, 8);
+    PointsField := New(PInputLine, Init(R, 5));
+    PointsField^.SetData(PointsStr);
+    Insert(PointsField);
+
+    R.Assign(32, 9, 66, 10);
+    Insert(New(PStaticText, Init(R, 'Scored on first visit only.')));
+
     { Buttons }
     R.Assign(20, 19, 30, 21);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -850,6 +881,10 @@ begin
     Room.Exits[dirWest] := StrToIntDef(WestStr, 0);
     Room.Exits[dirUp] := StrToIntDef(UpStr, 0);
     Room.Exits[dirDown] := StrToIntDef(DownStr, 0);
+
+    PointsStr := '';
+    PointsField^.GetData(PointsStr);
+    Room.Points := StrToIntDef(PointsStr, 0);
 
     { Update room in world }
     World.Rooms[Index] := Room;
@@ -990,10 +1025,12 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, UseTextField: PInputLine;
+  PointsField: PInputLine;
   PickupCheck: PCheckBoxes;
   Control: Word;
   Obj: TGameObject;
   ObjName, ObjDesc, RoomIDStr, UseTextStr: string;
+  PointsStr: string;
   PickupVal: Word;
   ZeroStr: string;
 begin
@@ -1056,6 +1093,17 @@ begin
     UseTextField := New(PInputLine, Init(R, MAX_OBJ_DESC));
     Insert(UseTextField);
 
+    { Score awarded on first take }
+    R.Assign(26, 8, 36, 9);
+    Insert(New(PStaticText, Init(R, 'Points:')));
+    R.Assign(37, 8, 47, 9);
+    PointsField := New(PInputLine, Init(R, 5));
+    PointsField^.SetData(ZeroStr);
+    Insert(PointsField);
+
+    R.Assign(26, 10, 56, 11);
+    Insert(New(PStaticText, Init(R, 'Scored on first take only.')));
+
     { Buttons }
     R.Assign(15, 15, 25, 17);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -1101,6 +1149,10 @@ begin
     if (PickupVal and $04) <> 0 then Include(Obj.Flags, ofOpen);
     if (PickupVal and $08) <> 0 then Include(Obj.Flags, ofRead);
 
+    PointsStr := '';
+    PointsField^.GetData(PointsStr);
+    Obj.Points := StrToIntDef(PointsStr, 0);
+
     { Add to world }
     Inc(World.ObjectCount);
     World.Objects[World.ObjectCount] := Obj;
@@ -1117,10 +1169,12 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, UseTextField: PInputLine;
+  PointsField: PInputLine;
   PickupCheck: PCheckBoxes;
   Control: Word;
   Obj: TGameObject;
   ObjName, ObjDesc, RoomIDStr, UseTextStr: string;
+  PointsStr: string;
   FlagVal: Word;
 begin
   if (Index < 1) or (Index > MAX_OBJECTS) or (not World.Objects[Index].Active) then
@@ -1133,6 +1187,7 @@ begin
   ObjDesc := Obj.Desc;
   RoomIDStr := IntToStr(Obj.RoomID);
   UseTextStr := Obj.UseText;
+  PointsStr := IntToStr(Obj.Points);
 
   { Create dialog }
   R.Assign(10, 3, 70, 21);
@@ -1194,6 +1249,17 @@ begin
     UseTextField^.SetData(UseTextStr);
     Insert(UseTextField);
 
+    { Score awarded on first take }
+    R.Assign(26, 8, 36, 9);
+    Insert(New(PStaticText, Init(R, 'Points:')));
+    R.Assign(37, 8, 47, 9);
+    PointsField := New(PInputLine, Init(R, 5));
+    PointsField^.SetData(PointsStr);
+    Insert(PointsField);
+
+    R.Assign(26, 10, 56, 11);
+    Insert(New(PStaticText, Init(R, 'Scored on first take only.')));
+
     { Buttons }
     R.Assign(15, 15, 25, 17);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -1238,6 +1304,10 @@ begin
     if (FlagVal and $02) <> 0 then Include(Obj.Flags, ofUse);
     if (FlagVal and $04) <> 0 then Include(Obj.Flags, ofOpen);
     if (FlagVal and $08) <> 0 then Include(Obj.Flags, ofRead);
+
+    PointsStr := '';
+    PointsField^.GetData(PointsStr);
+    Obj.Points := StrToIntDef(PointsStr, 0);
 
     { Update in world }
     World.Objects[Index] := Obj;
@@ -1582,15 +1652,19 @@ var
   Dialog: PDialog;
   R: TRect;
   TitleField, StartRoomField: PInputLine;
+  WinRoomField, WinObjField: PInputLine;
   Control: Word;
   TitleStr, StartRoomStr: string;
+  WinRoomStr, WinObjStr: string;
 begin
   { Initialize string variables for SetData }
   TitleStr := World.Title;
   StartRoomStr := IntToStr(World.CurrentRoom);
+  WinRoomStr := IntToStr(World.WinRoomID);
+  WinObjStr := IntToStr(World.WinObjectID);
 
   { Create dialog }
-  R.Assign(15, 8, 65, 17);
+  R.Assign(13, 5, 67, 21);
   Dialog := New(PDialog, Init(R, 'World Settings'));
 
   with Dialog^ do
@@ -1611,19 +1685,39 @@ begin
     StartRoomField^.SetData(StartRoomStr);
     Insert(StartRoomField);
 
-    { Info }
-    R.Assign(2, 6, 45, 7);
+    { Win condition }
+    R.Assign(2, 6, 15, 7);
+    Insert(New(PStaticText, Init(R, 'Win Room ID:')));
+    R.Assign(16, 6, 26, 7);
+    WinRoomField := New(PInputLine, Init(R, 5));
+    WinRoomField^.SetData(WinRoomStr);
+    Insert(WinRoomField);
+
+    R.Assign(2, 8, 15, 9);
+    Insert(New(PStaticText, Init(R, 'Win Object ID:')));
+    R.Assign(16, 8, 26, 9);
+    WinObjField := New(PInputLine, Init(R, 5));
+    WinObjField^.SetData(WinObjStr);
+    Insert(WinObjField);
+
+    R.Assign(2, 10, 52, 11);
     Insert(New(PStaticText, Init(R,
-      Format('Rooms: %d/%d  Objects: %d/%d  Mobs: %d/%d',
+      'Won by reaching Win Room carrying Win Object (0 = off).')));
+
+    { Info }
+    R.Assign(2, 12, 52, 13);
+    Insert(New(PStaticText, Init(R,
+      Format('Rooms: %d/%d  Objects: %d/%d  Mobs: %d/%d  Score: %d',
              [World.RoomCount, MAX_ROOMS,
               World.ObjectCount, MAX_OBJECTS,
-              World.MobCount, MAX_MOBS]))));
+              World.MobCount, MAX_MOBS,
+              ComputeMaxScore(World)]))));
 
     { Buttons }
-    R.Assign(10, 7, 20, 9);
+    R.Assign(12, 13, 22, 15);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
 
-    R.Assign(25, 7, 35, 9);
+    R.Assign(28, 13, 38, 15);
     Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
   end;
 
@@ -1634,14 +1728,20 @@ begin
     { Get data }
     TitleStr := '';
     StartRoomStr := '';
+    WinRoomStr := '';
+    WinObjStr := '';
 
     TitleField^.GetData(TitleStr);
     StartRoomField^.GetData(StartRoomStr);
+    WinRoomField^.GetData(WinRoomStr);
+    WinObjField^.GetData(WinObjStr);
 
     if TitleStr <> '' then
     begin
       World.Title := TitleStr;
       World.CurrentRoom := StrToIntDef(StartRoomStr, 1);
+      World.WinRoomID := StrToIntDef(WinRoomStr, 0);
+      World.WinObjectID := StrToIntDef(WinObjStr, 0);
       Modified := True;
 
       MessageBox('World settings updated!', nil, mfInformation + mfOKButton);

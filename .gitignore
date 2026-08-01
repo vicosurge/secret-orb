@@ -12,3 +12,6 @@ pascal/*.zip
 # Compiled executables (but allow FPC installer)
 pascal/bin/*.exe
 !fpc-*.exe
+
+# Release staging directory (make release / make sizecheck)
+pascal/release/

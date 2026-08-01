@@ -210,13 +210,19 @@ begin
     WriteAt(20, 18, IntToStr(R.Exits[dirDown]) + '    ');
     ResetColor;
 
+    if Field = 8 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 19, 'Points:      ');
+    WriteAt(20, 19, IntToStr(R.Points) + '    ');
+    ResetColor;
+
     SetColor(Cyan, Black);
-    WriteAt(1, 20, 'Tab: Next Field  Enter: Edit Field  F2: Save  Esc: Cancel');
+    WriteAt(1, 21, 'Points are scored the first time the player enters this room.');
+    WriteAt(1, 22, 'Tab: Next Field  Enter: Edit Field  F2: Save  Esc: Cancel');
     ResetColor;
 
     case ReadKey of
       #9: { Tab }
-        Field := (Field + 1) mod 8;
+        Field := (Field + 1) mod 9;
       #13: { Enter - edit current field }
         begin
           case Field of
@@ -252,6 +258,10 @@ begin
                  S := ReadLine(20, 18, 5);
                  R.Exits[dirDown] := StrToIntDef(S, R.Exits[dirDown]);
                end;
+            8: begin
+                 S := ReadLine(20, 19, 5);
+                 R.Points := StrToIntDef(S, R.Points);
+               end;
           end;
         end;
       #0: { Extended key }
@@ -270,7 +280,7 @@ begin
           #72: { Up }
             if Field > 0 then Dec(Field);
           #80: { Down }
-            if Field < 7 then Inc(Field);
+            if Field < 8 then Inc(Field);
         end;
       #27: { Escape }
         Exit;
@@ -365,11 +375,22 @@ begin
   WriteAt(5, 10, 'Start Room:  ');
   WriteAt(20, 10, IntToStr(World.CurrentRoom));
 
-  WriteAt(5, 12, 'Room Count:  ');
-  WriteAt(20, 12, IntToStr(World.RoomCount));
+  WriteAt(5, 12, 'Win Room:    ');
+  WriteAt(20, 12, IntToStr(World.WinRoomID));
+
+  WriteAt(5, 14, 'Win Object:  ');
+  WriteAt(20, 14, IntToStr(World.WinObjectID));
+
+  WriteAt(5, 16, 'Room Count:  ');
+  WriteAt(20, 16, IntToStr(World.RoomCount));
+
+  WriteAt(5, 17, 'Max Score:   ');
+  WriteAt(20, 17, IntToStr(ComputeMaxScore(World)));
 
   SetColor(Cyan, Black);
-  WriteAt(1, 16, 'Press T to change title, S to change start room, Esc to return');
+  WriteAt(1, 20, 'The game is won by reaching Win Room while carrying Win Object.');
+  WriteAt(1, 21, 'Use 0 for either to disable that requirement.');
+  WriteAt(1, 23, 'T=title  S=start room  W=win room  O=win object  Esc=return');
   ResetColor;
 
   case UpCase(ReadKey) of
@@ -388,6 +409,24 @@ begin
         if S <> '' then
         begin
           World.CurrentRoom := StrToIntDef(S, World.CurrentRoom);
+          Modified := True;
+        end;
+      end;
+    'W':
+      begin
+        S := ReadLine(20, 12, 5);
+        if S <> '' then
+        begin
+          World.WinRoomID := StrToIntDef(S, World.WinRoomID);
+          Modified := True;
+        end;
+      end;
+    'O':
+      begin
+        S := ReadLine(20, 14, 5);
+        if S <> '' then
+        begin
+          World.WinObjectID := StrToIntDef(S, World.WinObjectID);
           Modified := True;
         end;
       end;
@@ -598,13 +637,19 @@ begin
     WriteAt(20, 14, O.UseText);
     ResetColor;
 
+    if Field = 8 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 15, 'Points:      ');
+    WriteAt(20, 15, IntToStr(O.Points) + '    ');
+    ResetColor;
+
     SetColor(Cyan, Black);
+    WriteAt(1, 17, 'Points are scored the first time the player takes this object.');
     WriteAt(1, 18, 'Tab/Arrows: Navigate  Enter: Edit/Toggle  F2: Save  Esc: Cancel');
     ResetColor;
 
     case ReadKey of
       #9: { Tab }
-        Field := (Field + 1) mod 8;
+        Field := (Field + 1) mod 9;
       #13: { Enter }
         begin
           case Field of
@@ -644,6 +689,10 @@ begin
                  S := ReadLine(20, 14, MAX_OBJ_DESC);
                  if S <> '' then O.UseText := S;
                end;
+            8: begin
+                 S := ReadLine(20, 15, 5);
+                 O.Points := StrToIntDef(S, O.Points);
+               end;
           end;
         end;
       #0: { Extended key }
@@ -662,7 +711,7 @@ begin
           #72: { Up }
             if Field > 0 then Dec(Field);
           #80: { Down }
-            if Field < 7 then Inc(Field);
+            if Field < 8 then Inc(Field);
         end;
       #27: { Escape }
         Exit;
