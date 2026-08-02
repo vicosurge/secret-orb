@@ -80,6 +80,32 @@ begin
   Result := LoadWorld(FileName, G.World);
 end;
 
+{ Every story paragraph reaches the player through here, so a world that opts
+  into booklet mode cites numbers everywhere rather than in most places. }
+procedure ShowParagraph(var G: TGame; Num: Word);
+var
+  Body: TParaText;
+begin
+  if Num = 0 then Exit;
+  Body := ParagraphText(G.World, Num);
+  if Body = '' then Exit;
+
+  if (G.World.WorldFlags and WF_BOOKLET) <> 0 then
+  begin
+    ClearScreen;
+    DrawBox(18, 10, 62, 14);
+    SetColor(Yellow, Black);
+    WriteCenter(12, 'Read paragraph ' + IntToStr(Num) + ' in your booklet.');
+    ResetColor;
+    SetColor(Cyan, Black);
+    WriteCenter(SCREEN_HEIGHT, PRESS_ANY_KEY);
+    ResetColor;
+    WaitKey;
+  end
+  else
+    ShowTextPage(G.World.Title, Body);
+end;
+
 function ParseCommand(const Input: string; var Noun: string): TCommandType;
 var
   Cmd, FullCmd: string;
@@ -191,7 +217,7 @@ begin
   G.World.CurrentRoom := TargetID;
   G.LastMessage := 'You go ' + GetExitName(Dir) + '.';
 
-  { Award first-visit points once }
+  { Award first-visit points once, and play the room's arrival scene }
   if not G.World.Visited[TargetIdx] then
   begin
     G.World.Visited[TargetIdx] := True;
@@ -201,6 +227,7 @@ begin
       G.LastMessage := G.LastMessage + ' [+' +
                        IntToStr(G.World.Rooms[TargetIdx].Points) + ']';
     end;
+    ShowParagraph(G, G.World.Rooms[TargetIdx].FirstVisitPara);
   end;
 end;
 
@@ -421,7 +448,7 @@ begin
   WriteAt(45, 14, 'Default save file: ' + DEFAULT_SAVE);
 
   SetColor(Cyan, Black);
-  WriteCenter(24, 'Press any key to continue...');
+  WriteCenter(24, PRESS_ANY_KEY);
   ResetColor;
   WaitKey;
 end;
@@ -496,7 +523,8 @@ begin
 
   G.LastMessage := 'You take the ' + G.World.Objects[ObjIdx].Name + '.';
 
-  { Award points on the first take only, so drop-and-retake cannot farm score }
+  { Award points on the first take only, so drop-and-retake cannot farm score
+    or replay the scene }
   if not G.World.Taken[ObjIdx] then
   begin
     G.World.Taken[ObjIdx] := True;
@@ -506,6 +534,7 @@ begin
       G.LastMessage := G.LastMessage + ' [+' +
                        IntToStr(G.World.Objects[ObjIdx].Points) + ']';
     end;
+    ShowParagraph(G, G.World.Objects[ObjIdx].FirstTakePara);
   end;
 end;
 
@@ -674,6 +703,13 @@ begin
                      G.World.Mobs[MobIdx].Dialogue + '"'
   else
     G.LastMessage := G.World.Mobs[MobIdx].Name + ' has nothing to say.';
+
+  { The opening scene plays once; after that only the dialogue line remains }
+  if not G.World.Talked[MobIdx] then
+  begin
+    G.World.Talked[MobIdx] := True;
+    ShowParagraph(G, G.World.Mobs[MobIdx].FirstTalkPara);
+  end;
 end;
 
 procedure HandleInventory(var G: TGame);
@@ -703,6 +739,8 @@ end;
 
 procedure ShowEnding(var G: TGame);
 begin
+  ShowParagraph(G, G.World.WinPara);
+
   ClearScreen;
   SetColor(Yellow, Black);
   WriteCenter(8, '*** YOU HAVE WON ***');
@@ -715,7 +753,7 @@ begin
     WriteCenter(12, 'Final score: ' + IntToStr(G.World.Score));
   WriteCenter(13, 'Turns taken: ' + IntToStr(G.World.Turns));
   SetColor(Cyan, Black);
-  WriteCenter(16, 'Press any key to continue...');
+  WriteCenter(16, PRESS_ANY_KEY);
   ResetColor;
   WaitKey;
 end;
@@ -728,12 +766,16 @@ var
 begin
   InitDisplay;
 
-  { The starting room counts as visited, and scores like any other }
+  ShowParagraph(G, G.World.IntroPara);
+
+  { The starting room counts as visited, and scores like any other. It never
+    goes through HandleMove, so its arrival scene has to be played here. }
   StartIdx := FindRoomByID(G.World, G.World.CurrentRoom);
   if (StartIdx > 0) and not G.World.Visited[StartIdx] then
   begin
     G.World.Visited[StartIdx] := True;
     Inc(G.World.Score, G.World.Rooms[StartIdx].Points);
+    ShowParagraph(G, G.World.Rooms[StartIdx].FirstVisitPara);
   end;
 
   while G.State = gsPlaying do
@@ -745,7 +787,10 @@ begin
   end;
 
   if G.State = gsWon then
-    ShowEnding(G);
+    ShowEnding(G)
+  else
+    { Ending the adventure without winning is its own ending }
+    ShowParagraph(G, G.World.LosePara);
 
   ClearScreen;
   WriteCenter(12, 'Thanks for playing!');

@@ -10,11 +10,15 @@ uses
 
 const
   VERSION = '0.1.0';
+  PARA_COLS = 74;         { Editing grid width, fits the 80-column screen }
 
 type
   TEditorState = (esMenu, esRoomList, esAddRoom, esEditRoom, esWorldSettings,
                   esObjectList, esAddObject, esEditObject,
-                  esMobList, esAddMob, esEditMob);
+                  esMobList, esAddMob, esEditMob,
+                  esParagraphList, esEditParagraph);
+
+  TParaLines = array[1..MAX_PARA_LINES] of string;
 
 var
   World: TGameWorld;
@@ -24,6 +28,7 @@ var
   SelectedRoom: Integer;
   SelectedObject: Integer;
   SelectedMob: Integer;
+  SelectedPara: Integer;
 
 procedure DrawHeader;
 begin
@@ -69,6 +74,8 @@ begin
   WriteAt(30, Y, '5. List Mobs');
   Inc(Y, 1);
   WriteAt(30, Y, '6. Add Mob');
+  Inc(Y, 2);
+  WriteAt(30, Y, 'P. Story Paragraphs');
   Inc(Y, 2);
   WriteAt(30, Y, '7. World Settings');
   Inc(Y, 1);
@@ -215,14 +222,19 @@ begin
     WriteAt(20, 19, IntToStr(R.Points) + '    ');
     ResetColor;
 
+    if Field = 9 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 20, 'First Visit: ');
+    WriteAt(20, 20, IntToStr(R.FirstVisitPara) + '    ');
+    ResetColor;
+
     SetColor(Cyan, Black);
-    WriteAt(1, 21, 'Points are scored the first time the player enters this room.');
+    WriteAt(1, 21, 'Points and the First Visit paragraph both fire once, on arrival.');
     WriteAt(1, 22, 'Tab: Next Field  Enter: Edit Field  F2: Save  Esc: Cancel');
     ResetColor;
 
     case ReadKey of
       #9: { Tab }
-        Field := (Field + 1) mod 9;
+        Field := (Field + 1) mod 10;
       #13: { Enter - edit current field }
         begin
           case Field of
@@ -262,6 +274,10 @@ begin
                  S := ReadLine(20, 19, 5);
                  R.Points := StrToIntDef(S, R.Points);
                end;
+            9: begin
+                 S := ReadLine(20, 20, 5);
+                 R.FirstVisitPara := StrToIntDef(S, R.FirstVisitPara);
+               end;
           end;
         end;
       #0: { Extended key }
@@ -280,7 +296,7 @@ begin
           #72: { Up }
             if Field > 0 then Dec(Field);
           #80: { Down }
-            if Field < 8 then Inc(Field);
+            if Field < 9 then Inc(Field);
         end;
       #27: { Escape }
         Exit;
@@ -369,34 +385,50 @@ begin
   WriteCenter(4, '=== WORLD SETTINGS ===');
   ResetColor;
 
-  WriteAt(5, 8, 'Title:       ');
-  WriteAt(20, 8, World.Title);
+  WriteAt(5, 6, 'Title:       ');
+  WriteAt(20, 6, World.Title);
 
-  WriteAt(5, 10, 'Start Room:  ');
-  WriteAt(20, 10, IntToStr(World.CurrentRoom));
+  WriteAt(5, 8, 'Start Room:  ');
+  WriteAt(20, 8, IntToStr(World.CurrentRoom));
 
-  WriteAt(5, 12, 'Win Room:    ');
-  WriteAt(20, 12, IntToStr(World.WinRoomID));
+  WriteAt(5, 9, 'Win Room:    ');
+  WriteAt(20, 9, IntToStr(World.WinRoomID));
 
-  WriteAt(5, 14, 'Win Object:  ');
-  WriteAt(20, 14, IntToStr(World.WinObjectID));
+  WriteAt(5, 10, 'Win Object:  ');
+  WriteAt(20, 10, IntToStr(World.WinObjectID));
 
-  WriteAt(5, 16, 'Room Count:  ');
-  WriteAt(20, 16, IntToStr(World.RoomCount));
+  WriteAt(5, 12, 'Intro Para:  ');
+  WriteAt(20, 12, IntToStr(World.IntroPara));
 
-  WriteAt(5, 17, 'Max Score:   ');
-  WriteAt(20, 17, IntToStr(ComputeMaxScore(World)));
+  WriteAt(5, 13, 'Win Para:    ');
+  WriteAt(20, 13, IntToStr(World.WinPara));
+
+  WriteAt(5, 14, 'Lose Para:   ');
+  WriteAt(20, 14, IntToStr(World.LosePara));
+
+  WriteAt(5, 15, 'Booklet Mode:');
+  if (World.WorldFlags and WF_BOOKLET) <> 0 then
+    WriteAt(20, 15, 'ON  (cite numbers, do not print text) ')
+  else
+    WriteAt(20, 15, 'OFF (print paragraph text in game)    ');
+
+  WriteAt(5, 17, 'Room Count:  ');
+  WriteAt(20, 17, IntToStr(World.RoomCount));
+
+  WriteAt(5, 18, 'Max Score:   ');
+  WriteAt(20, 18, IntToStr(ComputeMaxScore(World)));
 
   SetColor(Cyan, Black);
   WriteAt(1, 20, 'The game is won by reaching Win Room while carrying Win Object.');
-  WriteAt(1, 21, 'Use 0 for either to disable that requirement.');
-  WriteAt(1, 23, 'T=title  S=start room  W=win room  O=win object  Esc=return');
+  WriteAt(1, 21, 'Use 0 for any of the above to disable it. Lose Para is shown when');
+  WriteAt(1, 22, 'the player quits without winning.');
+  WriteAt(1, 23, 'T=title S=start W=win room O=win obj  I/P/L=paras B=booklet  Esc');
   ResetColor;
 
   case UpCase(ReadKey) of
     'T':
       begin
-        S := ReadLine(20, 8, MAX_NAME_LEN);
+        S := ReadLine(20, 6, MAX_NAME_LEN);
         if S <> '' then
         begin
           World.Title := S;
@@ -405,7 +437,7 @@ begin
       end;
     'S':
       begin
-        S := ReadLine(20, 10, 5);
+        S := ReadLine(20, 8, 5);
         if S <> '' then
         begin
           World.CurrentRoom := StrToIntDef(S, World.CurrentRoom);
@@ -414,7 +446,7 @@ begin
       end;
     'W':
       begin
-        S := ReadLine(20, 12, 5);
+        S := ReadLine(20, 9, 5);
         if S <> '' then
         begin
           World.WinRoomID := StrToIntDef(S, World.WinRoomID);
@@ -423,12 +455,44 @@ begin
       end;
     'O':
       begin
-        S := ReadLine(20, 14, 5);
+        S := ReadLine(20, 10, 5);
         if S <> '' then
         begin
           World.WinObjectID := StrToIntDef(S, World.WinObjectID);
           Modified := True;
         end;
+      end;
+    'I':
+      begin
+        S := ReadLine(20, 12, 5);
+        if S <> '' then
+        begin
+          World.IntroPara := StrToIntDef(S, World.IntroPara);
+          Modified := True;
+        end;
+      end;
+    'P':
+      begin
+        S := ReadLine(20, 13, 5);
+        if S <> '' then
+        begin
+          World.WinPara := StrToIntDef(S, World.WinPara);
+          Modified := True;
+        end;
+      end;
+    'L':
+      begin
+        S := ReadLine(20, 14, 5);
+        if S <> '' then
+        begin
+          World.LosePara := StrToIntDef(S, World.LosePara);
+          Modified := True;
+        end;
+      end;
+    'B':
+      begin
+        World.WorldFlags := World.WorldFlags xor WF_BOOKLET;
+        Modified := True;
       end;
   end;
 end;
@@ -642,14 +706,19 @@ begin
     WriteAt(20, 15, IntToStr(O.Points) + '    ');
     ResetColor;
 
+    if Field = 9 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 16, 'First Take:  ');
+    WriteAt(20, 16, IntToStr(O.FirstTakePara) + '    ');
+    ResetColor;
+
     SetColor(Cyan, Black);
-    WriteAt(1, 17, 'Points are scored the first time the player takes this object.');
+    WriteAt(1, 17, 'Points and the First Take paragraph both fire once, on first take.');
     WriteAt(1, 18, 'Tab/Arrows: Navigate  Enter: Edit/Toggle  F2: Save  Esc: Cancel');
     ResetColor;
 
     case ReadKey of
       #9: { Tab }
-        Field := (Field + 1) mod 9;
+        Field := (Field + 1) mod 10;
       #13: { Enter }
         begin
           case Field of
@@ -693,6 +762,10 @@ begin
                  S := ReadLine(20, 15, 5);
                  O.Points := StrToIntDef(S, O.Points);
                end;
+            9: begin
+                 S := ReadLine(20, 16, 5);
+                 O.FirstTakePara := StrToIntDef(S, O.FirstTakePara);
+               end;
           end;
         end;
       #0: { Extended key }
@@ -711,7 +784,7 @@ begin
           #72: { Up }
             if Field > 0 then Dec(Field);
           #80: { Down }
-            if Field < 8 then Inc(Field);
+            if Field < 9 then Inc(Field);
         end;
       #27: { Escape }
         Exit;
@@ -891,13 +964,19 @@ begin
     WriteAt(20, 15, M.Dialogue);
     ResetColor;
 
+    if Field = 4 then SetColor(Black, White) else SetColor(LightGray, Black);
+    WriteAt(5, 17, 'First Talk:  ');
+    WriteAt(20, 17, IntToStr(M.FirstTalkPara) + '    ');
+    ResetColor;
+
     SetColor(Cyan, Black);
+    WriteAt(1, 19, 'First Talk plays a paragraph the first time the player talks here.');
     WriteAt(1, 20, 'Tab: Next Field  Enter: Edit Field  F2: Save  Esc: Cancel');
     ResetColor;
 
     case ReadKey of
       #9: { Tab }
-        Field := (Field + 1) mod 4;
+        Field := (Field + 1) mod 5;
       #13: { Enter - edit current field }
         begin
           case Field of
@@ -917,6 +996,10 @@ begin
                  S := ReadLine(20, 15, MAX_DIALOGUE);
                  if S <> '' then M.Dialogue := S;
                end;
+            4: begin
+                 S := ReadLine(20, 17, 5);
+                 M.FirstTalkPara := StrToIntDef(S, M.FirstTalkPara);
+               end;
           end;
         end;
       #0: { Extended key }
@@ -935,7 +1018,7 @@ begin
           #72: { Up }
             if Field > 0 then Dec(Field);
           #80: { Down }
-            if Field < 3 then Inc(Field);
+            if Field < 4 then Inc(Field);
         end;
       #27: { Escape }
         Exit;
@@ -1013,6 +1096,272 @@ begin
   until False;
 end;
 
+{ Splits a stored paragraph into the editing grid, and joins it back. The
+  editor has no multi-line control, so a paragraph is edited as N rows of
+  ReadLine and stored with #13#10 between them. }
+procedure ParaToLines(const S: TParaText; var Lines: TParaLines);
+var
+  I, Row, Start: Integer;
+begin
+  for I := 1 to MAX_PARA_LINES do
+    Lines[I] := '';
+  Row := 1;
+  Start := 1;
+  I := 1;
+  while (I <= Length(S)) and (Row <= MAX_PARA_LINES) do
+  begin
+    if (S[I] = #13) or (S[I] = #10) then
+    begin
+      Lines[Row] := Copy(S, Start, I - Start);
+      if (S[I] = #13) and (I < Length(S)) and (S[I + 1] = #10) then Inc(I);
+      Start := I + 1;
+      Inc(Row);
+    end;
+    Inc(I);
+  end;
+  if (Start <= Length(S)) and (Row <= MAX_PARA_LINES) then
+    Lines[Row] := Copy(S, Start, Length(S) - Start + 1);
+end;
+
+function LinesToPara(const Lines: TParaLines): TParaText;
+var
+  I, Last: Integer;
+begin
+  Last := 0;
+  for I := 1 to MAX_PARA_LINES do
+    if Lines[I] <> '' then Last := I;
+  Result := '';
+  for I := 1 to Last do
+  begin
+    if I > 1 then Result := Result + #13#10;
+    Result := Result + Lines[I];
+  end;
+end;
+
+procedure EditParagraphForm(Num: Integer);
+var
+  Lines: TParaLines;
+  Row, I: Integer;
+begin
+  ParaToLines(World.Paragraphs[Num], Lines);
+  Row := 1;
+
+  repeat
+    ClearScreen;
+    DrawHeader;
+
+    SetColor(Yellow, Black);
+    WriteCenter(3, '=== EDIT PARAGRAPH ' + IntToStr(Num) + ' ===');
+    ResetColor;
+
+    for I := 1 to MAX_PARA_LINES do
+    begin
+      if I = Row then SetColor(Black, White) else SetColor(LightGray, Black);
+      WriteAt(2, 3 + I, Copy(Lines[I] + StringOfChar(' ', PARA_COLS), 1, PARA_COLS));
+      ResetColor;
+    end;
+
+    SetColor(Cyan, Black);
+    WriteAt(1, 24, 'Up/Down: Line  Enter: Edit  F2: Save  Esc: Cancel');
+    ResetColor;
+
+    case ReadKey of
+      #13:
+        Lines[Row] := ReadLine(2, 3 + Row, PARA_COLS);
+      #9:
+        Row := (Row mod MAX_PARA_LINES) + 1;
+      #0:
+        case ReadKey of
+          #60: { F2 - Save }
+            begin
+              SetParagraph(World, Num, LinesToPara(Lines));
+              Modified := True;
+              Exit;
+            end;
+          #72: if Row > 1 then Dec(Row);
+          #80: if Row < MAX_PARA_LINES then Inc(Row);
+        end;
+      #27:
+        Exit;
+    end;
+  until False;
+end;
+
+procedure DrawParagraphList;
+var
+  I, J, Y, Shown: Integer;
+  Preview: string;
+begin
+  ClearScreen;
+  DrawHeader;
+
+  SetColor(Yellow, Black);
+  WriteCenter(4, '=== STORY PARAGRAPHS ===');
+  ResetColor;
+
+  Shown := 0;
+  for I := 1 to MAX_PARAGRAPHS do
+  begin
+    Y := 6 + Shown;
+    if (World.Paragraphs[I] <> '') and (Y < 21) then
+    begin
+      Inc(Shown);
+      if I = SelectedPara then
+        SetColor(Black, White)
+      else
+        SetColor(LightGray, Black);
+      { Show the opening words so a paragraph is recognisable in the list }
+      Preview := Copy(World.Paragraphs[I], 1, 60);
+      for J := 1 to Length(Preview) do
+        if (Preview[J] = #13) or (Preview[J] = #10) then Preview[J] := ' ';
+      WriteAt(3, Y, Copy('  ' + IntToStr(I) + '. ' + Preview +
+                         StringOfChar(' ', 70), 1, 72));
+      ResetColor;
+    end;
+  end;
+
+  if Shown = 0 then
+  begin
+    SetColor(DarkGray, Black);
+    WriteAt(3, 6, 'No paragraphs yet. Press A to write one.');
+    ResetColor;
+  end;
+
+  SetColor(Cyan, Black);
+  WriteAt(1, 22, 'Numbers are printed in the booklet, so deleting leaves a gap.');
+  WriteAt(1, 23, 'Up/Down: Select  E: Edit  A: Add  D: Delete  X: Export booklet  Esc');
+  ResetColor;
+end;
+
+procedure ExportBooklet;
+var
+  F: Text;
+  FileName: string;
+  I: Integer;
+begin
+  SetColor(Cyan, Black);
+  WriteAt(1, 24, 'Booklet file [ORBLORE.TXT]: ');
+  ResetColor;
+  FileName := ReadLine(29, 24, 40);
+  if FileName = '' then FileName := 'ORBLORE.TXT';
+
+  {$I-}
+  Assign(F, FileName);
+  Rewrite(F);
+  {$I+}
+  if IOResult <> 0 then
+  begin
+    SetColor(LightRed, Black);
+    WriteAt(1, 24, 'Could not write ' + FileName + '. Press any key...        ');
+    ResetColor;
+    ReadKey;
+    Exit;
+  end;
+
+  WriteLn(F, World.Title);
+  WriteLn(F, StringOfChar('=', Length(World.Title)));
+  WriteLn(F);
+  WriteLn(F, 'Do not read ahead. Read each paragraph only when the game');
+  WriteLn(F, 'tells you to.');
+  WriteLn(F);
+
+  for I := 1 to World.ParaCount do
+    if World.Paragraphs[I] <> '' then
+    begin
+      WriteLn(F, '--- ', I, ' ---');
+      WriteParaBody(F, World.Paragraphs[I]);
+      WriteLn(F);
+    end;
+
+  Close(F);
+
+  SetColor(LightGreen, Black);
+  WriteAt(1, 24, 'Wrote ' + FileName + '. Press any key...              ');
+  ResetColor;
+  ReadKey;
+end;
+
+procedure HandleParagraphList;
+var
+  Ch: Char;
+  I: Integer;
+  S: string;
+begin
+  SelectedPara := 0;
+  for I := 1 to MAX_PARAGRAPHS do
+    if World.Paragraphs[I] <> '' then
+    begin
+      SelectedPara := I;
+      Break;
+    end;
+
+  repeat
+    DrawParagraphList;
+    Ch := ReadKey;
+
+    case UpCase(Ch) of
+      #0:
+        case ReadKey of
+          #72: { Up }
+            for I := SelectedPara - 1 downto 1 do
+              if World.Paragraphs[I] <> '' then
+              begin
+                SelectedPara := I;
+                Break;
+              end;
+          #80: { Down }
+            for I := SelectedPara + 1 to MAX_PARAGRAPHS do
+              if World.Paragraphs[I] <> '' then
+              begin
+                SelectedPara := I;
+                Break;
+              end;
+        end;
+      'E':
+        if SelectedPara > 0 then
+          EditParagraphForm(SelectedPara);
+      'A':
+        begin
+          SetColor(Cyan, Black);
+          WriteAt(1, 24, 'Paragraph number (1-' + IntToStr(MAX_PARAGRAPHS) +
+                         '): ');
+          ResetColor;
+          S := ReadLine(26, 24, 4);
+          I := StrToIntDef(S, 0);
+          if (I >= 1) and (I <= MAX_PARAGRAPHS) then
+          begin
+            SelectedPara := I;
+            EditParagraphForm(I);
+          end;
+        end;
+      'D':
+        if SelectedPara > 0 then
+        begin
+          SetColor(LightRed, Black);
+          WriteAt(1, 24, 'Delete paragraph ' + IntToStr(SelectedPara) +
+                         '? Numbering will keep the gap. (Y/N) ');
+          ResetColor;
+          if UpCase(ReadKey) = 'Y' then
+          begin
+            SetParagraph(World, SelectedPara, '');
+            Modified := True;
+            SelectedPara := 0;
+            for I := 1 to MAX_PARAGRAPHS do
+              if World.Paragraphs[I] <> '' then
+              begin
+                SelectedPara := I;
+                Break;
+              end;
+          end;
+        end;
+      'X':
+        ExportBooklet;
+      #27:
+        Exit;
+    end;
+  until False;
+end;
+
 procedure MainLoop;
 var
   Ch: Char;
@@ -1032,6 +1381,7 @@ begin
       '4': EditObjectForm(0, True);
       '5': HandleMobList;
       '6': EditMobForm(0, True);
+      'P': HandleParagraphList;
       '7': WorldSettings;
       '8': LoadWorldFile;
       '9': SaveWorldFile;
@@ -1063,6 +1413,7 @@ begin
   SelectedRoom := 0;
   SelectedObject := 0;
   SelectedMob := 0;
+  SelectedPara := 0;
 
   ClrScr;
   CursorOff;

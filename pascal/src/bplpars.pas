@@ -11,7 +11,7 @@ uses
   SysUtils, GameData;
 
 const
-  BPL_REVISION = 2;   { Revision 1 files still load; new tags default to 0 }
+  BPL_REVISION = 3;   { Older revisions still load; new tags default to 0 }
   MAX_BPL_ERRORS = 50;
 
 type
@@ -180,7 +180,57 @@ end;
   spelling opens a block. }
 function IsBlockType(const S: string): Boolean;
 begin
-  Result := (S = 'WORLD') or (S = 'ROOM') or (S = 'OBJECT') or (S = 'MOB');
+  Result := (S = 'WORLD') or (S = 'ROOM') or (S = 'OBJECT') or (S = 'MOB') or
+            (S = 'PARAGRAPH');
+end;
+
+{ A BPL tag value is one line and cannot contain braces, so paragraph line
+  breaks travel as a backslash-n escape. }
+function EncodeParaText(const S: TParaText): TParaText;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    case S[I] of
+      #13:
+        begin
+          Result := Result + '\n';
+          if (I < Length(S)) and (S[I + 1] = #10) then Inc(I);
+        end;
+      #10: Result := Result + '\n';
+      '\': Result := Result + '\\';
+      '{': Result := Result + '(';
+      '}': Result := Result + ')';
+    else
+      Result := Result + S[I];
+    end;
+    Inc(I);
+  end;
+end;
+
+function DecodeParaText(const S: TParaText): TParaText;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    if (S[I] = '\') and (I < Length(S)) then
+    begin
+      Inc(I);
+      if S[I] = 'n' then
+        Result := Result + #13#10
+      else
+        Result := Result + S[I];
+    end
+    else
+      Result := Result + S[I];
+    Inc(I);
+  end;
 end;
 
 { Parse a single BPL tag {KEY:VALUE} }
@@ -302,6 +352,8 @@ var
   TempUseText, TempDialogue: string;
   TempPoints: Word;
   TempExits: array[TDirection] of string;
+  TempFirstVisit, TempFirstTake, TempFirstTalk: Word;
+  TempText: TParaText;
   Dir: TDirection;
 begin
   Result := False;
@@ -387,6 +439,10 @@ begin
           TempUseText := '';
           TempDialogue := '';
           TempPoints := 0;
+          TempFirstVisit := 0;
+          TempFirstTake := 0;
+          TempFirstTalk := 0;
+          TempText := '';
           for Dir := Low(TDirection) to High(TDirection) do
             TempExits[Dir] := '0';
         end;
@@ -414,6 +470,7 @@ begin
                 W.Rooms[CurrentRoom].Name := TempName;
                 W.Rooms[CurrentRoom].Desc := TempDesc;
                 W.Rooms[CurrentRoom].Points := TempPoints;
+                W.Rooms[CurrentRoom].FirstVisitPara := TempFirstVisit;
                 W.Rooms[CurrentRoom].Active := True;
                 { Store exit VARs temporarily - resolve in second pass }
                 for Dir := Low(TDirection) to High(TDirection) do
@@ -438,6 +495,7 @@ begin
                 W.Objects[CurrentObject].Flags := TempFlags;
                 W.Objects[CurrentObject].UseText := TempUseText;
                 W.Objects[CurrentObject].Points := TempPoints;
+                W.Objects[CurrentObject].FirstTakePara := TempFirstTake;
                 W.Objects[CurrentObject].Active := True;
                 RegisterVAR(GlobalParser, TempVAR, 'O', TempOC);
               end;
@@ -456,10 +514,18 @@ begin
                 W.Mobs[CurrentMob].Desc := TempDesc;
                 W.Mobs[CurrentMob].RoomID := StrToIntDef(TempRoomID, 0);
                 W.Mobs[CurrentMob].Dialogue := TempDialogue;
+                W.Mobs[CurrentMob].FirstTalkPara := TempFirstTalk;
                 W.Mobs[CurrentMob].Active := True;
                 RegisterVAR(GlobalParser, TempVAR, 'M', TempOC);
               end;
             end;
+          end
+          else if BlockType = 'PARAGRAPH' then
+          begin
+            { Paragraphs are keyed by plain number rather than a VAR, so the
+              number an author prints in the booklet is the number they wrote }
+            if (TempOC >= 1) and (TempOC <= MAX_PARAGRAPHS) then
+              SetParagraph(W, TempOC, DecodeParaText(TempText));
           end;
           InBlock := False;
           BlockType := '';
@@ -490,6 +556,27 @@ begin
           W.WinRoomID := StrToIntDef(Tags[I].Value, 0)
         else if Tags[I].Key = 'WINOBJ' then
           W.WinObjectID := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'INTRO' then
+          W.IntroPara := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'WINPARA' then
+          W.WinPara := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'LOSEPARA' then
+          W.LosePara := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'BOOKLET' then
+        begin
+          if StrToIntDef(Tags[I].Value, 0) <> 0 then
+            W.WorldFlags := W.WorldFlags or WF_BOOKLET
+          else
+            W.WorldFlags := W.WorldFlags and not WF_BOOKLET;
+        end
+        else if Tags[I].Key = 'FIRSTVISIT' then
+          TempFirstVisit := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'FIRSTTAKE' then
+          TempFirstTake := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'FIRSTTALK' then
+          TempFirstTalk := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'TEXT' then
+          TempText := Tags[I].Value
         else if Tags[I].Key = 'POINTS' then
           TempPoints := StrToIntDef(Tags[I].Value, 0)
         else if Tags[I].Key = 'ROOM' then
@@ -611,6 +698,11 @@ begin
   WriteLn(F, '{REVISION:', BPL_REVISION, '}{TITLE:', W.Title, '}{START:R', W.CurrentRoom, '}');
   if (W.WinRoomID > 0) or (W.WinObjectID > 0) then
     WriteLn(F, '{WINROOM:', W.WinRoomID, '}{WINOBJ:', W.WinObjectID, '}');
+  if (W.IntroPara > 0) or (W.WinPara > 0) or (W.LosePara > 0) then
+    WriteLn(F, '{INTRO:', W.IntroPara, '}{WINPARA:', W.WinPara,
+            '}{LOSEPARA:', W.LosePara, '}');
+  if (W.WorldFlags and WF_BOOKLET) <> 0 then
+    WriteLn(F, '{BOOKLET:1}');
   WriteLn(F, '{END}');
   WriteLn(F);
 
@@ -631,6 +723,8 @@ begin
               '}{DOWN:', W.Rooms[I].Exits[dirDown], '}');
       if W.Rooms[I].Points > 0 then
         WriteLn(F, '{POINTS:', W.Rooms[I].Points, '}');
+      if W.Rooms[I].FirstVisitPara > 0 then
+        WriteLn(F, '{FIRSTVISIT:', W.Rooms[I].FirstVisitPara, '}');
       WriteLn(F, '{END}');
       WriteLn(F);
     end;
@@ -656,6 +750,8 @@ begin
         WriteLn(F, '{USETEXT:', W.Objects[I].UseText, '}');
       if W.Objects[I].Points > 0 then
         WriteLn(F, '{POINTS:', W.Objects[I].Points, '}');
+      if W.Objects[I].FirstTakePara > 0 then
+        WriteLn(F, '{FIRSTTAKE:', W.Objects[I].FirstTakePara, '}');
       WriteLn(F, '{END}');
       WriteLn(F);
     end;
@@ -673,6 +769,22 @@ begin
       WriteLn(F, '{ROOM:', W.Mobs[I].RoomID, '}');
       if W.Mobs[I].Dialogue <> '' then
         WriteLn(F, '{DIALOGUE:', W.Mobs[I].Dialogue, '}');
+      if W.Mobs[I].FirstTalkPara > 0 then
+        WriteLn(F, '{FIRSTTALK:', W.Mobs[I].FirstTalkPara, '}');
+      WriteLn(F, '{END}');
+      WriteLn(F);
+    end;
+  end;
+
+  { Write PARAGRAPH blocks. OC is the booklet number, so gaps are preserved. }
+  for I := 1 to W.ParaCount do
+  begin
+    if W.Paragraphs[I] <> '' then
+    begin
+      WriteLn(F, '{START:PARAGRAPH}');
+      WriteLn(F, '{REVISION:', BPL_REVISION, '}');
+      WriteLn(F, '{OC:', I, '}');
+      WriteLn(F, '{TEXT:', EncodeParaText(W.Paragraphs[I]), '}');
       WriteLn(F, '{END}');
       WriteLn(F);
     end;

@@ -5,7 +5,7 @@ program EditorTV;
 {$MODE OBJFPC}{$H+}
 
 uses
-  Objects, Drivers, Views, Menus, App, Dialogs, MsgBox, SysUtils,
+  Objects, Drivers, Views, Menus, App, Dialogs, MsgBox, Editors, SysUtils,
   GameData, DataFile;
 
 const
@@ -36,6 +36,12 @@ const
 
   cmWorldSettings = 500;
   cmAbout         = 501;
+
+  cmListParas     = 600;
+  cmAddPara       = 601;
+  cmEditPara      = 602;
+  cmDeletePara    = 603;
+  cmExportBooklet = 604;
 
 type
   { Main application class }
@@ -75,6 +81,12 @@ type
     procedure AddMob;
     procedure EditMobByIndex(Index: Integer);
     procedure DeleteMob;
+
+    { Story paragraph operations }
+    procedure ListParagraphs;
+    procedure AddParagraph;
+    procedure EditParagraphByNumber(Num: Integer);
+    procedure ExportBooklet;
 
     { World operations }
     procedure WorldSettings;
@@ -156,12 +168,18 @@ begin
       NewItem('~L~ist Mobs', '', kbNoKey, cmListMobs, hcNoContext,
       NewItem('~A~dd Mob', '', kbNoKey, cmAddMob, hcNoContext,
       nil))),
+    NewSubMenu('~S~tory', hcNoContext, NewMenu(
+      NewItem('~L~ist Paragraphs', '', kbNoKey, cmListParas, hcNoContext,
+      NewItem('~A~dd Paragraph', '', kbNoKey, cmAddPara, hcNoContext,
+      NewLine(
+      NewItem('Export ~B~ooklet...', '', kbNoKey, cmExportBooklet, hcNoContext,
+      nil))))),
     NewSubMenu('~W~orld', hcNoContext, NewMenu(
       NewItem('~S~ettings...', '', kbNoKey, cmWorldSettings, hcNoContext,
       NewLine(
       NewItem('~A~bout...', '', kbNoKey, cmAbout, hcNoContext,
       nil)))),
-    nil))))))));
+    nil)))))))));
 end;
 
 procedure TEditorApp.HandleEvent(var Event: TEvent);
@@ -185,6 +203,10 @@ begin
 
       cmListMobs:      ListMobs;
       cmAddMob:        AddMob;
+
+      cmListParas:     ListParagraphs;
+      cmAddPara:       AddParagraph;
+      cmExportBooklet: ExportBooklet;
 
       cmWorldSettings: WorldSettings;
       cmAbout:         ShowAbout;
@@ -581,12 +603,12 @@ var
   R: TRect;
   NameField, DescField: PInputLine;
   NorthField, SouthField, EastField, WestField, UpField, DownField: PInputLine;
-  PointsField: PInputLine;
+  PointsField, FirstVisitField: PInputLine;
   Control: Word;
   Room: TRoom;
   RoomName, RoomDesc: string;
   NorthStr, SouthStr, EastStr, WestStr, UpStr, DownStr: string;
-  PointsStr: string;
+  PointsStr, FirstVisitStr: string;
   ZeroStr: string;
 begin
   ZeroStr := '0';
@@ -674,6 +696,17 @@ begin
     R.Assign(32, 9, 66, 10);
     Insert(New(PStaticText, Init(R, 'Scored on first visit only.')));
 
+    { Story paragraph played on first arrival }
+    R.Assign(32, 11, 44, 12);
+    Insert(New(PStaticText, Init(R, 'First Visit:')));
+    R.Assign(45, 11, 55, 12);
+    FirstVisitField := New(PInputLine, Init(R, 5));
+    FirstVisitField^.SetData(ZeroStr);
+    Insert(FirstVisitField);
+
+    R.Assign(32, 13, 66, 14);
+    Insert(New(PStaticText, Init(R, 'Paragraph number, 0 = none.')));
+
     { Buttons }
     R.Assign(20, 19, 30, 21);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -722,6 +755,10 @@ begin
     PointsField^.GetData(PointsStr);
     Room.Points := StrToIntDef(PointsStr, 0);
 
+    FirstVisitStr := '';
+    FirstVisitField^.GetData(FirstVisitStr);
+    Room.FirstVisitPara := StrToIntDef(FirstVisitStr, 0);
+
     { Add room to world }
     Inc(World.RoomCount);
     World.Rooms[World.RoomCount] := Room;
@@ -739,12 +776,12 @@ var
   R: TRect;
   NameField, DescField: PInputLine;
   NorthField, SouthField, EastField, WestField, UpField, DownField: PInputLine;
-  PointsField: PInputLine;
+  PointsField, FirstVisitField: PInputLine;
   Control: Word;
   Room: TRoom;
   RoomName, RoomDesc: string;
   NorthStr, SouthStr, EastStr, WestStr, UpStr, DownStr: string;
-  PointsStr: string;
+  PointsStr, FirstVisitStr: string;
 begin
   if (Index < 1) or (Index > MAX_ROOMS) or (not World.Rooms[Index].Active) then
     Exit;
@@ -755,6 +792,7 @@ begin
   RoomName := Room.Name;
   RoomDesc := Room.Desc;
   PointsStr := IntToStr(Room.Points);
+  FirstVisitStr := IntToStr(Room.FirstVisitPara);
   NorthStr := IntToStr(Room.Exits[dirNorth]);
   SouthStr := IntToStr(Room.Exits[dirSouth]);
   EastStr := IntToStr(Room.Exits[dirEast]);
@@ -838,6 +876,17 @@ begin
     R.Assign(32, 9, 66, 10);
     Insert(New(PStaticText, Init(R, 'Scored on first visit only.')));
 
+    { Story paragraph played on first arrival }
+    R.Assign(32, 11, 44, 12);
+    Insert(New(PStaticText, Init(R, 'First Visit:')));
+    R.Assign(45, 11, 55, 12);
+    FirstVisitField := New(PInputLine, Init(R, 5));
+    FirstVisitField^.SetData(FirstVisitStr);
+    Insert(FirstVisitField);
+
+    R.Assign(32, 13, 66, 14);
+    Insert(New(PStaticText, Init(R, 'Paragraph number, 0 = none.')));
+
     { Buttons }
     R.Assign(20, 19, 30, 21);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -885,6 +934,10 @@ begin
     PointsStr := '';
     PointsField^.GetData(PointsStr);
     Room.Points := StrToIntDef(PointsStr, 0);
+
+    FirstVisitStr := '';
+    FirstVisitField^.GetData(FirstVisitStr);
+    Room.FirstVisitPara := StrToIntDef(FirstVisitStr, 0);
 
     { Update room in world }
     World.Rooms[Index] := Room;
@@ -1025,12 +1078,12 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, UseTextField: PInputLine;
-  PointsField: PInputLine;
+  PointsField, FirstTakeField: PInputLine;
   PickupCheck: PCheckBoxes;
   Control: Word;
   Obj: TGameObject;
   ObjName, ObjDesc, RoomIDStr, UseTextStr: string;
-  PointsStr: string;
+  PointsStr, FirstTakeStr: string;
   PickupVal: Word;
   ZeroStr: string;
 begin
@@ -1104,6 +1157,17 @@ begin
     R.Assign(26, 10, 56, 11);
     Insert(New(PStaticText, Init(R, 'Scored on first take only.')));
 
+    { Story paragraph played on first take }
+    R.Assign(26, 12, 36, 13);
+    Insert(New(PStaticText, Init(R, 'First Take:')));
+    R.Assign(37, 12, 47, 13);
+    FirstTakeField := New(PInputLine, Init(R, 5));
+    FirstTakeField^.SetData(ZeroStr);
+    Insert(FirstTakeField);
+
+    R.Assign(26, 13, 56, 14);
+    Insert(New(PStaticText, Init(R, 'Paragraph number, 0 = none.')));
+
     { Buttons }
     R.Assign(15, 15, 25, 17);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -1153,6 +1217,10 @@ begin
     PointsField^.GetData(PointsStr);
     Obj.Points := StrToIntDef(PointsStr, 0);
 
+    FirstTakeStr := '';
+    FirstTakeField^.GetData(FirstTakeStr);
+    Obj.FirstTakePara := StrToIntDef(FirstTakeStr, 0);
+
     { Add to world }
     Inc(World.ObjectCount);
     World.Objects[World.ObjectCount] := Obj;
@@ -1169,12 +1237,12 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, UseTextField: PInputLine;
-  PointsField: PInputLine;
+  PointsField, FirstTakeField: PInputLine;
   PickupCheck: PCheckBoxes;
   Control: Word;
   Obj: TGameObject;
   ObjName, ObjDesc, RoomIDStr, UseTextStr: string;
-  PointsStr: string;
+  PointsStr, FirstTakeStr: string;
   FlagVal: Word;
 begin
   if (Index < 1) or (Index > MAX_OBJECTS) or (not World.Objects[Index].Active) then
@@ -1187,6 +1255,7 @@ begin
   ObjDesc := Obj.Desc;
   RoomIDStr := IntToStr(Obj.RoomID);
   UseTextStr := Obj.UseText;
+  FirstTakeStr := IntToStr(Obj.FirstTakePara);
   PointsStr := IntToStr(Obj.Points);
 
   { Create dialog }
@@ -1260,6 +1329,17 @@ begin
     R.Assign(26, 10, 56, 11);
     Insert(New(PStaticText, Init(R, 'Scored on first take only.')));
 
+    { Story paragraph played on first take }
+    R.Assign(26, 12, 36, 13);
+    Insert(New(PStaticText, Init(R, 'First Take:')));
+    R.Assign(37, 12, 47, 13);
+    FirstTakeField := New(PInputLine, Init(R, 5));
+    FirstTakeField^.SetData(FirstTakeStr);
+    Insert(FirstTakeField);
+
+    R.Assign(26, 13, 56, 14);
+    Insert(New(PStaticText, Init(R, 'Paragraph number, 0 = none.')));
+
     { Buttons }
     R.Assign(15, 15, 25, 17);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
@@ -1308,6 +1388,10 @@ begin
     PointsStr := '';
     PointsField^.GetData(PointsStr);
     Obj.Points := StrToIntDef(PointsStr, 0);
+
+    FirstTakeStr := '';
+    FirstTakeField^.GetData(FirstTakeStr);
+    Obj.FirstTakePara := StrToIntDef(FirstTakeStr, 0);
 
     { Update in world }
     World.Objects[Index] := Obj;
@@ -1440,9 +1524,11 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, DialogueField: PInputLine;
+  FirstTalkField: PInputLine;
   Control: Word;
   Mob: TMob;
   MobName, MobDesc, RoomIDStr, DialogueStr: string;
+  FirstTalkStr: string;
   ZeroStr: string;
 begin
   ZeroStr := '0';
@@ -1457,7 +1543,7 @@ begin
   Mob.Active := True;
 
   { Create dialog }
-  R.Assign(10, 5, 70, 17);
+  R.Assign(10, 4, 70, 20);
   Dialog := New(PDialog, Init(R, 'Add New Mob'));
 
   with Dialog^ do
@@ -1491,11 +1577,22 @@ begin
     DialogueField := New(PInputLine, Init(R, MAX_DIALOGUE));
     Insert(DialogueField);
 
+    { Story paragraph played the first time the player talks to this mob }
+    R.Assign(2, 10, 13, 11);
+    Insert(New(PStaticText, Init(R, 'First Talk:')));
+    R.Assign(14, 10, 24, 11);
+    FirstTalkField := New(PInputLine, Init(R, 5));
+    FirstTalkField^.SetData(ZeroStr);
+    Insert(FirstTalkField);
+
+    R.Assign(26, 10, 56, 11);
+    Insert(New(PStaticText, Init(R, 'Paragraph number, 0 = none.')));
+
     { Buttons }
-    R.Assign(15, 10, 25, 12);
+    R.Assign(15, 12, 25, 14);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
 
-    R.Assign(30, 10, 40, 12);
+    R.Assign(30, 12, 40, 14);
     Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
   end;
 
@@ -1508,11 +1605,13 @@ begin
     MobDesc := '';
     RoomIDStr := '';
     DialogueStr := '';
+    FirstTalkStr := '';
 
     NameField^.GetData(MobName);
     DescField^.GetData(MobDesc);
     RoomIDField^.GetData(RoomIDStr);
     DialogueField^.GetData(DialogueStr);
+    FirstTalkField^.GetData(FirstTalkStr);
 
     if MobName = '' then
     begin
@@ -1525,6 +1624,7 @@ begin
     Mob.Desc := MobDesc;
     Mob.RoomID := StrToIntDef(RoomIDStr, 0);
     Mob.Dialogue := DialogueStr;
+    Mob.FirstTalkPara := StrToIntDef(FirstTalkStr, 0);
 
     { Add to world }
     Inc(World.MobCount);
@@ -1542,9 +1642,11 @@ var
   Dialog: PDialog;
   R: TRect;
   NameField, DescField, RoomIDField, DialogueField: PInputLine;
+  FirstTalkField: PInputLine;
   Control: Word;
   Mob: TMob;
   MobName, MobDesc, RoomIDStr, DialogueStr: string;
+  FirstTalkStr: string;
 begin
   if (Index < 1) or (Index > MAX_MOBS) or (not World.Mobs[Index].Active) then
     Exit;
@@ -1556,9 +1658,10 @@ begin
   MobDesc := Mob.Desc;
   RoomIDStr := IntToStr(Mob.RoomID);
   DialogueStr := Mob.Dialogue;
+  FirstTalkStr := IntToStr(Mob.FirstTalkPara);
 
   { Create dialog }
-  R.Assign(10, 5, 70, 17);
+  R.Assign(10, 4, 70, 20);
   Dialog := New(PDialog, Init(R, 'Edit Mob'));
 
   with Dialog^ do
@@ -1595,11 +1698,22 @@ begin
     DialogueField^.SetData(DialogueStr);
     Insert(DialogueField);
 
+    { Story paragraph played the first time the player talks to this mob }
+    R.Assign(2, 10, 13, 11);
+    Insert(New(PStaticText, Init(R, 'First Talk:')));
+    R.Assign(14, 10, 24, 11);
+    FirstTalkField := New(PInputLine, Init(R, 5));
+    FirstTalkField^.SetData(FirstTalkStr);
+    Insert(FirstTalkField);
+
+    R.Assign(26, 10, 56, 11);
+    Insert(New(PStaticText, Init(R, 'Paragraph number, 0 = none.')));
+
     { Buttons }
-    R.Assign(15, 10, 25, 12);
+    R.Assign(15, 12, 25, 14);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
 
-    R.Assign(30, 10, 40, 12);
+    R.Assign(30, 12, 40, 14);
     Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
   end;
 
@@ -1612,11 +1726,13 @@ begin
     MobDesc := '';
     RoomIDStr := '';
     DialogueStr := '';
+    FirstTalkStr := '';
 
     NameField^.GetData(MobName);
     DescField^.GetData(MobDesc);
     RoomIDField^.GetData(RoomIDStr);
     DialogueField^.GetData(DialogueStr);
+    FirstTalkField^.GetData(FirstTalkStr);
 
     if MobName = '' then
     begin
@@ -1629,6 +1745,7 @@ begin
     Mob.Desc := MobDesc;
     Mob.RoomID := StrToIntDef(RoomIDStr, 0);
     Mob.Dialogue := DialogueStr;
+    Mob.FirstTalkPara := StrToIntDef(FirstTalkStr, 0);
 
     { Update in world }
     World.Mobs[Index] := Mob;
@@ -1647,24 +1764,356 @@ end;
 
 { World Operations }
 
+{ Story Paragraph Operations }
+
+{ Collapses the memo's line endings to #13#10 so every editor and every
+  export format sees the same breaks }
+function NormaliseBreaks(const S: TParaText): TParaText;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    if (S[I] = #13) or (S[I] = #10) then
+    begin
+      Result := Result + #13#10;
+      if (S[I] = #13) and (I < Length(S)) and (S[I + 1] = #10) then Inc(I);
+    end
+    else
+      Result := Result + S[I];
+    Inc(I);
+  end;
+end;
+
+function ParaPreview(const S: TParaText): string;
+var
+  I: Integer;
+  T: string;
+begin
+  T := Copy(S, 1, 58);
+  for I := 1 to Length(T) do
+    if (T[I] = #13) or (T[I] = #10) then T[I] := ' ';
+  ParaPreview := T;
+end;
+
+procedure TEditorApp.EditParagraphByNumber(Num: Integer);
+type
+  { Matches TMemo.DataSize, which is BufSize + SizeOf(Sw_Word) }
+  TParaMemoRec = record
+    Length: Sw_Word;
+    Buffer: array[0..MAX_PARA_LEN - 1] of Char;
+  end;
+var
+  Dialog: PDialog;
+  R: TRect;
+  Memo: PMemo;
+  VScroll: PScrollBar;
+  Control: Word;
+  Data: TParaMemoRec;
+  Existing: TParaText;
+  Len: Integer;
+begin
+  if (Num < 1) or (Num > MAX_PARAGRAPHS) then Exit;
+
+  Existing := World.Paragraphs[Num];
+  Len := Length(Existing);
+  if Len > MAX_PARA_LEN then Len := MAX_PARA_LEN;
+  FillChar(Data, SizeOf(Data), 0);
+  Data.Length := Len;
+  if Len > 0 then
+    Move(Existing[1], Data.Buffer[0], Len);
+
+  R.Assign(8, 3, 72, 22);
+  Dialog := New(PDialog, Init(R, 'Paragraph ' + IntToStr(Num)));
+
+  with Dialog^ do
+  begin
+    R.Assign(60, 2, 61, 14);
+    VScroll := New(PScrollBar, Init(R));
+    Insert(VScroll);
+
+    R.Assign(2, 2, 60, 14);
+    Memo := New(PMemo, Init(R, nil, VScroll, nil, MAX_PARA_LEN));
+    Memo^.SetData(Data);
+    Insert(Memo);
+
+    R.Assign(2, 14, 60, 15);
+    Insert(New(PStaticText, Init(R,
+      'This number is printed in the booklet. Blank lines are kept.')));
+
+    R.Assign(16, 15, 26, 17);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(32, 15, 42, 17);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+
+  if Control = cmOK then
+  begin
+    FillChar(Data, SizeOf(Data), 0);
+    Memo^.GetData(Data);
+    Len := Data.Length;
+    if Len > MAX_PARA_LEN then Len := MAX_PARA_LEN;
+    SetLength(Existing, Len);
+    if Len > 0 then
+      Move(Data.Buffer[0], Existing[1], Len);
+    SetParagraph(World, Num, NormaliseBreaks(Existing));
+    Modified := True;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+procedure TEditorApp.AddParagraph;
+var
+  Dialog: PDialog;
+  R: TRect;
+  NumField: PInputLine;
+  Control: Word;
+  NumStr: string;
+  Num, I: Integer;
+begin
+  { Suggest the first free slot, but let the author choose the number }
+  Num := 1;
+  for I := 1 to MAX_PARAGRAPHS do
+    if World.Paragraphs[I] = '' then
+    begin
+      Num := I;
+      Break;
+    end;
+  NumStr := IntToStr(Num);
+
+  R.Assign(20, 8, 60, 15);
+  Dialog := New(PDialog, Init(R, 'Add Paragraph'));
+
+  with Dialog^ do
+  begin
+    R.Assign(3, 2, 37, 3);
+    Insert(New(PStaticText, Init(R,
+      'Paragraph number (1-' + IntToStr(MAX_PARAGRAPHS) + '):')));
+
+    R.Assign(3, 3, 13, 4);
+    NumField := New(PInputLine, Init(R, 5));
+    NumField^.SetData(NumStr);
+    Insert(NumField);
+
+    R.Assign(3, 4, 37, 5);
+    Insert(New(PStaticText, Init(R, 'An existing number is edited.')));
+
+    R.Assign(6, 5, 16, 7);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(21, 5, 31, 7);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+
+  if Control = cmOK then
+  begin
+    NumStr := '';
+    NumField^.GetData(NumStr);
+    Num := StrToIntDef(NumStr, 0);
+    if (Num >= 1) and (Num <= MAX_PARAGRAPHS) then
+    begin
+      Dispose(Dialog, Done);
+      EditParagraphByNumber(Num);
+      Exit;
+    end
+    else
+      MessageBox('Paragraph number out of range.', nil, mfError + mfOKButton);
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+procedure TEditorApp.ListParagraphs;
+var
+  Dialog: PDialog;
+  R: TRect;
+  ListBox: PListBox;
+  ScrollBar: PScrollBar;
+  Control: Word;
+  I, Count: Integer;
+  Items: PStringCollection;
+  Numbers: array[1..MAX_PARAGRAPHS] of Integer;
+  SelectedIndex: Integer;
+begin
+  Items := New(PStringCollection, Init(10, 10));
+  Count := 0;
+
+  for I := 1 to MAX_PARAGRAPHS do
+    if World.Paragraphs[I] <> '' then
+    begin
+      Inc(Count);
+      Numbers[Count] := I;
+      Items^.Insert(NewStr(Format('%3d: %s', [I, ParaPreview(World.Paragraphs[I])])));
+    end;
+
+  if Count = 0 then
+  begin
+    MessageBox('No paragraphs yet. Use Story / Add Paragraph.', nil,
+               mfInformation + mfOKButton);
+    Dispose(Items, Done);
+    Exit;
+  end;
+
+  R.Assign(6, 3, 74, 22);
+  Dialog := New(PDialog, Init(R, 'Story Paragraphs'));
+
+  with Dialog^ do
+  begin
+    R.Assign(64, 2, 65, 16);
+    ScrollBar := New(PScrollBar, Init(R));
+    R.Assign(2, 2, 64, 16);
+    ListBox := New(PListBox, Init(R, 1, ScrollBar));
+    ListBox^.NewList(Items);
+    Insert(ListBox);
+    Insert(ScrollBar);
+
+    R.Assign(10, 16, 20, 18);
+    Insert(New(PButton, Init(R, '~E~dit', cmEditPara, bfDefault)));
+
+    R.Assign(25, 16, 35, 18);
+    Insert(New(PButton, Init(R, '~D~elete', cmDeletePara, bfNormal)));
+
+    R.Assign(45, 16, 55, 18);
+    Insert(New(PButton, Init(R, '~C~lose', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+  SelectedIndex := ListBox^.Focused;
+
+  if (Control = cmEditPara) and (SelectedIndex >= 0) and
+     (SelectedIndex < Count) then
+  begin
+    Dispose(Dialog, Done);
+    EditParagraphByNumber(Numbers[SelectedIndex + 1]);
+    Exit;
+  end
+  else if (Control = cmDeletePara) and (SelectedIndex >= 0) and
+          (SelectedIndex < Count) then
+  begin
+    if MessageBox('Delete this paragraph? The number stays reserved, ' +
+                  'so a printed booklet keeps matching.', nil,
+                  mfWarning + mfYesButton + mfNoButton) = cmYes then
+    begin
+      SetParagraph(World, Numbers[SelectedIndex + 1], '');
+      Modified := True;
+    end;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+procedure TEditorApp.ExportBooklet;
+var
+  Dialog: PDialog;
+  R: TRect;
+  InputField: PInputLine;
+  Control: Word;
+  Filename, DefaultFile: string;
+  F: Text;
+  I, Written: Integer;
+begin
+  R.Assign(15, 8, 65, 14);
+  Dialog := New(PDialog, Init(R, 'Export Booklet'));
+
+  with Dialog^ do
+  begin
+    R.Assign(3, 2, 47, 3);
+    Insert(New(PStaticText, Init(R, 'Printable booklet filename:')));
+
+    R.Assign(3, 3, 47, 4);
+    InputField := New(PInputLine, Init(R, 255));
+    DefaultFile := 'ORBLORE.TXT';
+    InputField^.SetData(DefaultFile);
+    Insert(InputField);
+
+    R.Assign(10, 5, 20, 7);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(25, 5, 35, 7);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+
+  if Control = cmOK then
+  begin
+    Filename := '';
+    InputField^.GetData(Filename);
+
+    if Filename <> '' then
+    begin
+      {$I-}
+      Assign(F, Filename);
+      Rewrite(F);
+      {$I+}
+      if IOResult <> 0 then
+        MessageBox('Could not write that file.', nil, mfError + mfOKButton)
+      else
+      begin
+        WriteLn(F, World.Title);
+        WriteLn(F, StringOfChar('=', Length(World.Title)));
+        WriteLn(F);
+        WriteLn(F, 'Do not read ahead. Read each paragraph only when the');
+        WriteLn(F, 'game tells you to.');
+        WriteLn(F);
+
+        Written := 0;
+        for I := 1 to World.ParaCount do
+          if World.Paragraphs[I] <> '' then
+          begin
+            WriteLn(F, '--- ', I, ' ---');
+            WriteParaBody(F, World.Paragraphs[I]);
+            WriteLn(F);
+            Inc(Written);
+          end;
+
+        Close(F);
+        MessageBox(Format('Wrote %d paragraphs to the booklet.', [Written]),
+                   nil, mfInformation + mfOKButton);
+      end;
+    end;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
 procedure TEditorApp.WorldSettings;
 var
   Dialog: PDialog;
   R: TRect;
   TitleField, StartRoomField: PInputLine;
   WinRoomField, WinObjField: PInputLine;
+  IntroField, WinParaField, LoseParaField: PInputLine;
+  BookletCheck: PCheckBoxes;
   Control: Word;
   TitleStr, StartRoomStr: string;
   WinRoomStr, WinObjStr: string;
+  IntroStr, WinParaStr, LoseParaStr: string;
+  BookletVal: Word;
 begin
   { Initialize string variables for SetData }
   TitleStr := World.Title;
   StartRoomStr := IntToStr(World.CurrentRoom);
   WinRoomStr := IntToStr(World.WinRoomID);
   WinObjStr := IntToStr(World.WinObjectID);
+  IntroStr := IntToStr(World.IntroPara);
+  WinParaStr := IntToStr(World.WinPara);
+  LoseParaStr := IntToStr(World.LosePara);
+  if (World.WorldFlags and WF_BOOKLET) <> 0 then
+    BookletVal := $01
+  else
+    BookletVal := $00;
 
   { Create dialog }
-  R.Assign(13, 5, 67, 21);
+  R.Assign(10, 2, 70, 24);
   Dialog := New(PDialog, Init(R, 'World Settings'));
 
   with Dialog^ do
@@ -1700,12 +2149,44 @@ begin
     WinObjField^.SetData(WinObjStr);
     Insert(WinObjField);
 
-    R.Assign(2, 10, 52, 11);
+    R.Assign(2, 10, 56, 11);
     Insert(New(PStaticText, Init(R,
       'Won by reaching Win Room carrying Win Object (0 = off).')));
 
+    { Story paragraphs }
+    R.Assign(2, 12, 15, 13);
+    Insert(New(PStaticText, Init(R, 'Intro Para:')));
+    R.Assign(16, 12, 26, 13);
+    IntroField := New(PInputLine, Init(R, 5));
+    IntroField^.SetData(IntroStr);
+    Insert(IntroField);
+
+    R.Assign(30, 12, 43, 13);
+    Insert(New(PStaticText, Init(R, 'Win Para:')));
+    R.Assign(44, 12, 54, 13);
+    WinParaField := New(PInputLine, Init(R, 5));
+    WinParaField^.SetData(WinParaStr);
+    Insert(WinParaField);
+
+    R.Assign(2, 14, 15, 15);
+    Insert(New(PStaticText, Init(R, 'Lose Para:')));
+    R.Assign(16, 14, 26, 15);
+    LoseParaField := New(PInputLine, Init(R, 5));
+    LoseParaField^.SetData(LoseParaStr);
+    Insert(LoseParaField);
+
+    R.Assign(30, 14, 56, 15);
+    Insert(New(PStaticText, Init(R, 'Shown on quitting unwon.')));
+
+    R.Assign(2, 16, 56, 17);
+    BookletCheck := New(PCheckBoxes, Init(R,
+      NewSItem('Booklet mode: cite paragraph numbers, do not print text',
+      nil)));
+    BookletCheck^.SetData(BookletVal);
+    Insert(BookletCheck);
+
     { Info }
-    R.Assign(2, 12, 52, 13);
+    R.Assign(2, 18, 56, 19);
     Insert(New(PStaticText, Init(R,
       Format('Rooms: %d/%d  Objects: %d/%d  Mobs: %d/%d  Score: %d',
              [World.RoomCount, MAX_ROOMS,
@@ -1714,10 +2195,10 @@ begin
               ComputeMaxScore(World)]))));
 
     { Buttons }
-    R.Assign(12, 13, 22, 15);
+    R.Assign(12, 19, 22, 21);
     Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
 
-    R.Assign(28, 13, 38, 15);
+    R.Assign(28, 19, 38, 21);
     Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
   end;
 
@@ -1735,17 +2216,32 @@ begin
     StartRoomField^.GetData(StartRoomStr);
     WinRoomField^.GetData(WinRoomStr);
     WinObjField^.GetData(WinObjStr);
+    IntroField^.GetData(IntroStr);
+    WinParaField^.GetData(WinParaStr);
+    LoseParaField^.GetData(LoseParaStr);
+    BookletCheck^.GetData(BookletVal);
 
+    { An empty title only rejects the title - it used to discard the start
+      room and win condition along with it }
     if TitleStr <> '' then
-    begin
-      World.Title := TitleStr;
-      World.CurrentRoom := StrToIntDef(StartRoomStr, 1);
-      World.WinRoomID := StrToIntDef(WinRoomStr, 0);
-      World.WinObjectID := StrToIntDef(WinObjStr, 0);
-      Modified := True;
+      World.Title := TitleStr
+    else
+      MessageBox('World title cannot be empty - title left unchanged.', nil,
+                 mfWarning + mfOKButton);
 
-      MessageBox('World settings updated!', nil, mfInformation + mfOKButton);
-    end;
+    World.CurrentRoom := StrToIntDef(StartRoomStr, 1);
+    World.WinRoomID := StrToIntDef(WinRoomStr, 0);
+    World.WinObjectID := StrToIntDef(WinObjStr, 0);
+    World.IntroPara := StrToIntDef(IntroStr, 0);
+    World.WinPara := StrToIntDef(WinParaStr, 0);
+    World.LosePara := StrToIntDef(LoseParaStr, 0);
+    if (BookletVal and $01) <> 0 then
+      World.WorldFlags := World.WorldFlags or WF_BOOKLET
+    else
+      World.WorldFlags := World.WorldFlags and not WF_BOOKLET;
+    Modified := True;
+
+    MessageBox('World settings updated!', nil, mfInformation + mfOKButton);
   end;
 
   Dispose(Dialog, Done);

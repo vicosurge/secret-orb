@@ -16,7 +16,7 @@ var
   Game: TGame;
   WorldFile: string;
 
-procedure ShowTitle;
+procedure ShowTitle(const WorldTitle: string);
 begin
   ClearScreen;
   SetColor(LightCyan, Black);
@@ -27,7 +27,10 @@ begin
   ResetColor;
 
   SetColor(Yellow, Black);
-  WriteCenter(14, 'A Text Adventure');
+  if WorldTitle <> '' then
+    WriteCenter(14, WorldTitle)
+  else
+    WriteCenter(14, 'A Text Adventure');
   ResetColor;
 
   SetColor(DarkGray, Black);
@@ -55,14 +58,14 @@ begin
   else
     WorldFile := DEFAULT_WORLD;
 
-  ShowTitle;
-
-  { Load world data }
+  { Load the world before the title screen, so the title screen can name it }
   if not LoadGame(Game, WorldFile) then
   begin
     ShowError('Could not load world file: ' + WorldFile);
     Halt(1);
   end;
+
+  ShowTitle(Game.World.Title);
 
   { Run the game }
   RunGame(Game);

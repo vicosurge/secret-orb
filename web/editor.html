@@ -180,6 +180,10 @@
   .screen .msg { color: var(--green); }
   .screen .cmd { color: #8d8272; }
   .screen .win { color: var(--amber); font-weight: 700; }
+  .screen .para { color: #cfc4b0; }
+  .chk { display: flex; align-items: center; gap: 5px; font-size: 13px;
+         color: var(--dim); white-space: nowrap; }
+  .chk input { margin: 0; }
   .cmdline { display: flex; gap: 8px; margin-top: 9px; }
   .cmdline input { font-family: var(--mono); }
   .sidecard { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 11px; }
@@ -250,6 +254,22 @@
     <label for="wWinObj">Win object</label>
     <input type="number" id="wWinObj" min="0" step="1">
   </div>
+  <div class="field narrow">
+    <label for="wIntro">Intro &para;</label>
+    <input type="number" id="wIntro" min="0" step="1">
+  </div>
+  <div class="field narrow">
+    <label for="wWinPara">Win &para;</label>
+    <input type="number" id="wWinPara" min="0" step="1">
+  </div>
+  <div class="field narrow">
+    <label for="wLosePara">Lose &para;</label>
+    <input type="number" id="wLosePara" min="0" step="1">
+  </div>
+  <div class="field narrow">
+    <label for="wBooklet" title="Cite paragraph numbers instead of printing the text">Booklet</label>
+    <label class="chk"><input type="checkbox" id="wBooklet"> mode</label>
+  </div>
   <div class="stat">
     Max score <b id="sScore">0</b> &nbsp;&middot;&nbsp;
     <span id="sCounts">0 rooms, 0 objects, 0 mobs</span>
@@ -260,6 +280,7 @@
   <button data-tab="rooms" aria-selected="true">Rooms <span class="badge" id="bRooms">0</span></button>
   <button data-tab="objects" aria-selected="false">Objects <span class="badge" id="bObjects">0</span></button>
   <button data-tab="mobs" aria-selected="false">Mobs <span class="badge" id="bMobs">0</span></button>
+  <button data-tab="story" aria-selected="false">Story <span class="badge" id="bParas">0</span></button>
   <button data-tab="map" aria-selected="false">Map</button>
   <button data-tab="check" aria-selected="false">Check <span class="badge" id="bIssues">0</span></button>
   <button data-tab="play" aria-selected="false">Playtest</button>
@@ -296,6 +317,23 @@
         <ul id="listMobs"></ul>
       </div>
       <div class="form" id="formMob"></div>
+    </div>
+  </section>
+
+  <!-- STORY -->
+  <section class="panel" id="panel-story">
+    <div class="split">
+      <div class="listbox">
+        <header>
+          <span>Paragraphs</span>
+          <span>
+            <button id="addPara">+ Add</button>
+            <button id="exportBooklet">Booklet</button>
+          </span>
+        </header>
+        <ul id="listParas"></ul>
+      </div>
+      <div class="form" id="formPara"></div>
     </div>
   </section>
 
@@ -365,8 +403,10 @@ const LIM = {
   ROOMS: 256, OBJECTS: 128, MOBS: 64, INVENTORY: 8,
   TITLE: 40, ROOM_NAME: 40, ROOM_DESC: 255,
   OBJ_NAME: 30, OBJ_DESC: 100, USE_TEXT: 100,
-  MOB_NAME: 30, MOB_DESC: 100, DIALOGUE: 200
+  MOB_NAME: 30, MOB_DESC: 100, DIALOGUE: 200,
+  PARAGRAPHS: 128, PARA_LEN: 1600
 };
+const WF_BOOKLET = 0x01;
 const DIRS = ["north", "south", "east", "west", "up", "down"];
 const DIR_LABEL = { north: "North", south: "South", east: "East", west: "West", up: "Up", down: "Down" };
 const OPPOSITE = { north: "south", south: "north", east: "west", west: "east", up: "down", down: "up" };
@@ -379,16 +419,45 @@ let world = blankWorld();
 let sel = { rooms: null, objects: null, mobs: null };
 
 function blankWorld() {
-  return { title: "Untitled", startRoom: 1, winRoomID: 0, winObjectID: 0, rooms: [], objects: [], mobs: [] };
+  // paragraphs is a sparse map of number -> text. Numbers are printed in the
+  // booklet, so deleting one must leave its number unused rather than shift
+  // every later paragraph.
+  return { title: "Untitled", startRoom: 1, winRoomID: 0, winObjectID: 0,
+           introPara: 0, winPara: 0, losePara: 0, worldFlags: 0,
+           paragraphs: {}, rooms: [], objects: [], mobs: [] };
 }
 function newRoom(id) {
-  return { id, name: "", desc: "", exits: { north: 0, south: 0, east: 0, west: 0, up: 0, down: 0 }, points: 0 };
+  return { id, name: "", desc: "", exits: { north: 0, south: 0, east: 0, west: 0, up: 0, down: 0 },
+           points: 0, firstVisitPara: 0 };
 }
 function newObject(id) {
   return { id, name: "", desc: "", roomID: 0, carriedBy: 0,
-           flags: { pickup: true, use: false, open: false, read: false }, useText: "", points: 0 };
+           flags: { pickup: true, use: false, open: false, read: false }, useText: "",
+           points: 0, firstTakePara: 0 };
 }
-function newMob(id) { return { id, name: "", desc: "", roomID: 0, dialogue: "" }; }
+function newMob(id) { return { id, name: "", desc: "", roomID: 0, dialogue: "", firstTalkPara: 0 }; }
+
+// Highest used paragraph number: what the binary section length is based on.
+function paraCount() {
+  let n = 0;
+  for (const k of Object.keys(world.paragraphs)) {
+    const i = k | 0;
+    if (world.paragraphs[k] && i > n) n = i;
+  }
+  return n;
+}
+function paraNumbers() {
+  return Object.keys(world.paragraphs)
+    .map(k => k | 0)
+    .filter(i => i >= 1 && i <= LIM.PARAGRAPHS && world.paragraphs[i])
+    .sort((a, b) => a - b);
+}
+function setParagraph(num, text) {
+  if (num < 1 || num > LIM.PARAGRAPHS) return;
+  if (text) world.paragraphs[num] = String(text).slice(0, LIM.PARA_LEN);
+  else delete world.paragraphs[num];
+}
+const bookletMode = () => (world.worldFlags & WF_BOOKLET) !== 0;
 
 function nextId(list) {
   let n = 1;
@@ -431,21 +500,37 @@ function readShortString(view, off, maxLen) {
 const flagsToByte = f => (f.pickup ? 1 : 0) | (f.use ? 2 : 0) | (f.open ? 4 : 0) | (f.read ? 8 : 0);
 const byteToFlags = b => ({ pickup: !!(b & 1), use: !!(b & 2), open: !!(b & 4), read: !!(b & 8) });
 
-/* ---- Binary SORB version 2 --------------------------------------------
+/* ---- Binary SORB version 3 --------------------------------------------
    Record sizes and field offsets are taken from the packed records in
-   pascal/src/datafile.pas: header 69, room 315, object 244, mob 341 bytes. */
-const BIN = { HEADER: 69, ROOM: 315, OBJECT: 244, MOB: 341 };
+   pascal/src/datafile.pas: header 69, room 317, object 246, mob 343 bytes.
+   Each version 3 record is its version 2 record with one Word appended, and
+   the header keeps its 69 bytes by naming what used to be reserved:
+     61 IntroPara, 63 WinPara, 65 LosePara, 67 WorldFlags, 68 reserved.
+   After the mob records comes the paragraph section:
+     Uint16 count, then count times (Uint16 length, length bytes of text).
+   A zero length is an unused slot, which is how numbering survives a
+   deletion. Any drift from datafile.pas garbles every record. */
+const BIN = { HEADER: 69, ROOM: 317, OBJECT: 246, MOB: 343 };
+const BIN_V2 = { ROOM: 315, OBJECT: 244, MOB: 341 };
 
 function writeBinary() {
   const rooms = world.rooms, objects = world.objects, mobs = world.mobs;
-  const total = BIN.HEADER + rooms.length * BIN.ROOM + objects.length * BIN.OBJECT + mobs.length * BIN.MOB;
+  const nPara = paraCount();
+
+  // Paragraph bytes first, so the buffer can be sized exactly.
+  const paraBytes = [];
+  for (let i = 1; i <= nPara; i++) paraBytes.push(latin1(world.paragraphs[i] || "").slice(0, LIM.PARA_LEN));
+  const paraSize = 2 + paraBytes.reduce((s, b) => s + 2 + b.length, 0);
+
+  const total = BIN.HEADER + rooms.length * BIN.ROOM + objects.length * BIN.OBJECT +
+                mobs.length * BIN.MOB + paraSize;
   const buf = new ArrayBuffer(total);
   const v = new DataView(buf);
   let p = 0;
 
   // Header
   "SORB".split("").forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
-  v.setUint16(4, 2, true);                       // version
+  v.setUint16(4, 3, true);                       // version
   v.setUint16(6, rooms.length, true);
   v.setUint16(8, objects.length, true);
   v.setUint16(10, mobs.length, true);
@@ -454,7 +539,11 @@ function writeBinary() {
   v.setUint16(55, world.winRoomID | 0, true);
   v.setUint16(57, world.winObjectID | 0, true);
   v.setUint16(59, maxScore() & 0xffff, true);
-  for (let i = 61; i < 69; i++) v.setUint8(i, 0);   // reserved
+  v.setUint16(61, world.introPara | 0, true);
+  v.setUint16(63, world.winPara | 0, true);
+  v.setUint16(65, world.losePara | 0, true);
+  v.setUint8(67, world.worldFlags & 0xff);
+  v.setUint8(68, 0);                                // reserved
   p = BIN.HEADER;
 
   for (const r of rooms) {
@@ -465,6 +554,7 @@ function writeBinary() {
     v.setUint16(p + 311, r.points | 0, true);
     v.setUint8(p + 313, 1);                                 // Active
     v.setUint8(p + 314, 0);                                 // Reserved
+    v.setUint16(p + 315, r.firstVisitPara | 0, true);       // v3
     p += BIN.ROOM;
   }
   for (const o of objects) {
@@ -478,6 +568,7 @@ function writeBinary() {
     writeShortString(v, p + 140, o.useText, LIM.USE_TEXT);  // p+140 .. p+240
     v.setUint16(p + 241, o.points | 0, true);
     v.setUint8(p + 243, 0);
+    v.setUint16(p + 244, o.firstTakePara | 0, true);        // v3
     p += BIN.OBJECT;
   }
   for (const m of mobs) {
@@ -488,7 +579,17 @@ function writeBinary() {
     writeShortString(v, p + 136, m.dialogue, LIM.DIALOGUE); // p+136 .. p+336
     v.setUint8(p + 337, 1);                                 // Active
     v.setUint8(p + 338, 0); v.setUint8(p + 339, 0); v.setUint8(p + 340, 0);
+    v.setUint16(p + 341, m.firstTalkPara | 0, true);        // v3
     p += BIN.MOB;
+  }
+
+  v.setUint16(p, nPara, true);
+  p += 2;
+  for (const bytes of paraBytes) {
+    v.setUint16(p, bytes.length, true);
+    p += 2;
+    for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
+    p += bytes.length;
   }
   return buf;
 }
@@ -498,34 +599,43 @@ function readBinary(buf, fileName) {
   const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
   if (magic !== "SORB") throw new Error("Not a Secret Orb binary world (missing SORB signature).");
   const version = v.getUint16(4, true);
-  if (version !== 1 && version !== 2) throw new Error("Unsupported binary version " + version + ".");
+  if (version < 1 || version > 3) throw new Error("Unsupported binary version " + version + ".");
 
   const w = blankWorld();
   const nRooms = v.getUint16(6, true), nObjects = v.getUint16(8, true), nMobs = v.getUint16(10, true);
   w.startRoom = v.getUint16(12, true);
 
-  // Version 1 has a 16-byte header and no title, points or win condition.
+  // Version 1 has a 20-byte header (4+2+2+2+2+2+6, see TGameHeader in
+  // datafile.pas) and no title, points or win condition.
   let p;
   if (version === 1) {
     w.title = (fileName || "").replace(/\.[^.]*$/, "") || "Loaded World";
-    p = 16;
+    p = 20;
   } else {
     w.title = readShortString(v, 14, LIM.TITLE);
     w.winRoomID = v.getUint16(55, true);
     w.winObjectID = v.getUint16(57, true);
+    if (version >= 3) {
+      w.introPara = v.getUint16(61, true);
+      w.winPara = v.getUint16(63, true);
+      w.losePara = v.getUint16(65, true);
+      w.worldFlags = v.getUint8(67);
+    }
     p = BIN.HEADER;
   }
-  const RSZ = version === 1 ? 313 : BIN.ROOM;
-  const OSZ = version === 1 ? 242 : BIN.OBJECT;
-  const MSZ = version === 1 ? 339 : BIN.MOB;
+  const v2plus = version >= 2;
+  const RSZ = version === 1 ? 313 : (version === 2 ? BIN_V2.ROOM : BIN.ROOM);
+  const OSZ = version === 1 ? 242 : (version === 2 ? BIN_V2.OBJECT : BIN.OBJECT);
+  const MSZ = version === 1 ? 339 : (version === 2 ? BIN_V2.MOB : BIN.MOB);
 
   for (let i = 0; i < nRooms; i++, p += RSZ) {
     const r = newRoom(v.getUint16(p, true));
     r.name = readShortString(v, p + 2, LIM.ROOM_NAME);
     r.desc = readShortString(v, p + 43, LIM.ROOM_DESC);
     DIRS.forEach((d, k) => { r.exits[d] = v.getUint16(p + 299 + k * 2, true); });
-    r.points = version === 2 ? v.getUint16(p + 311, true) : 0;
-    const active = v.getUint8(p + (version === 2 ? 313 : 311));
+    r.points = v2plus ? v.getUint16(p + 311, true) : 0;
+    r.firstVisitPara = version >= 3 ? v.getUint16(p + 315, true) : 0;
+    const active = v.getUint8(p + (v2plus ? 313 : 311));
     if (active) w.rooms.push(r);
   }
   for (let i = 0; i < nObjects; i++, p += OSZ) {
@@ -536,7 +646,8 @@ function readBinary(buf, fileName) {
     o.carriedBy = v.getUint16(p + 136, true);
     o.flags = byteToFlags(v.getUint8(p + 138));
     o.useText = readShortString(v, p + 140, LIM.USE_TEXT);
-    o.points = version === 2 ? v.getUint16(p + 241, true) : 0;
+    o.points = v2plus ? v.getUint16(p + 241, true) : 0;
+    o.firstTakePara = version >= 3 ? v.getUint16(p + 244, true) : 0;
     if (v.getUint8(p + 139)) w.objects.push(o);
   }
   for (let i = 0; i < nMobs; i++, p += MSZ) {
@@ -545,7 +656,23 @@ function readBinary(buf, fileName) {
     m.desc = readShortString(v, p + 33, LIM.MOB_DESC);
     m.roomID = v.getUint16(p + 134, true);
     m.dialogue = readShortString(v, p + 136, LIM.DIALOGUE);
+    m.firstTalkPara = version >= 3 ? v.getUint16(p + 341, true) : 0;
     if (v.getUint8(p + 337)) w.mobs.push(m);
+  }
+
+  if (version >= 3 && p + 2 <= buf.byteLength) {
+    const n = Math.min(v.getUint16(p, true), LIM.PARAGRAPHS);
+    p += 2;
+    for (let i = 1; i <= n && p + 2 <= buf.byteLength; i++) {
+      const len = v.getUint16(p, true);
+      p += 2;
+      if (len === 0) continue;              // unused slot, number stays reserved
+      if (p + len > buf.byteLength) break;  // truncated section, keep what we have
+      let s = "";
+      for (let k = 0; k < len; k++) s += String.fromCharCode(v.getUint8(p + k));
+      w.paragraphs[i] = s;
+      p += len;
+    }
   }
   return w;
 }
@@ -564,6 +691,10 @@ function writeText() {
   L.push("START=" + (world.startRoom | 0));
   L.push("WINROOM=" + (world.winRoomID | 0));
   L.push("WINOBJECT=" + (world.winObjectID | 0));
+  L.push("INTRO=" + (world.introPara | 0));
+  L.push("WINPARA=" + (world.winPara | 0));
+  L.push("LOSEPARA=" + (world.losePara | 0));
+  L.push("BOOKLET=" + (bookletMode() ? 1 : 0));
   L.push("");
   for (const r of world.rooms) {
     L.push("[ROOM:" + r.id + "]");
@@ -571,6 +702,7 @@ function writeText() {
     L.push("DESC=" + oneLine(r.desc));
     for (const d of DIRS) L.push(d.toUpperCase() + "=" + (r.exits[d] | 0));
     L.push("POINTS=" + (r.points | 0));
+    L.push("FIRSTVISIT=" + (r.firstVisitPara | 0));
     L.push("");
   }
   for (const o of world.objects) {
@@ -582,6 +714,7 @@ function writeText() {
     L.push("FLAGS=" + FLAGS.filter(f => o.flags[f]).join(","));
     L.push("USETEXT=" + oneLine(o.useText));
     L.push("POINTS=" + (o.points | 0));
+    L.push("FIRSTTAKE=" + (o.firstTakePara | 0));
     L.push("");
   }
   for (const m of world.mobs) {
@@ -590,25 +723,61 @@ function writeText() {
     L.push("DESC=" + oneLine(m.desc));
     L.push("ROOM=" + (m.roomID | 0));
     L.push("DIALOGUE=" + oneLine(m.dialogue));
+    L.push("FIRSTTALK=" + (m.firstTalkPara | 0));
+    L.push("");
+  }
+  // Paragraph bodies are literal text rather than key=value, so they keep
+  // their line breaks. Only a real section header ends one.
+  for (const n of paraNumbers()) {
+    L.push("[PARAGRAPH:" + n + "]");
+    for (const ln of String(world.paragraphs[n]).split(/\r?\n/)) L.push(ln);
     L.push("");
   }
   return L.join("\r\n");
 }
 
+// Only real section headers end a paragraph body; a body line may itself
+// start with a bracket. Mirrors IsSectionHeader in datafile.pas.
+const SECTION_RE = /^\[(WORLD\]|ROOM:|OBJECT:|MOB:|PARAGRAPH:)/i;
+
 function readText(src) {
   const w = blankWorld();
   let section = null, cur = null;
+  let paraNum = 0, paraBuf = [];
+
+  const flushPara = () => {
+    if (paraNum > 0) {
+      while (paraBuf.length && paraBuf[paraBuf.length - 1].trim() === "") paraBuf.pop();
+      if (paraBuf.length) w.paragraphs[paraNum] = paraBuf.join("\r\n").slice(0, LIM.PARA_LEN);
+    }
+    paraNum = 0; paraBuf = [];
+  };
+
   for (let raw of src.split(/\r?\n/)) {
     const line = raw.trim();
+
+    // Inside a paragraph every line is content, including blank ones and
+    // anything that looks like a comment.
+    if (section === "paragraph" && !SECTION_RE.test(line)) {
+      if (paraNum > 0) paraBuf.push(raw);
+      continue;
+    }
+
     if (!line || line[0] === ";" || line[0] === "#") continue;
     if (line[0] === "[") {
       const m = /^\[([A-Z]+)(?::(\d+))?\]/i.exec(line);
       if (!m) continue;
+      flushPara();
       const kind = m[1].toUpperCase(), id = parseInt(m[2] || "0", 10);
       if (kind === "WORLD") { section = "world"; cur = null; }
       else if (kind === "ROOM") { section = "room"; cur = newRoom(id || w.rooms.length + 1); w.rooms.push(cur); }
       else if (kind === "OBJECT") { section = "object"; cur = newObject(id || w.objects.length + 1); w.objects.push(cur); }
       else if (kind === "MOB") { section = "mob"; cur = newMob(id || w.mobs.length + 1); w.mobs.push(cur); }
+      else if (kind === "PARAGRAPH") {
+        section = "paragraph"; cur = null;
+        paraNum = (id >= 1 && id <= LIM.PARAGRAPHS) ? id : 0;
+        paraBuf = [];
+      }
       else { section = null; cur = null; }
       continue;
     }
@@ -622,11 +791,16 @@ function readText(src) {
       else if (key === "START") w.startRoom = num;
       else if (key === "WINROOM") w.winRoomID = num;
       else if (key === "WINOBJECT") w.winObjectID = num;
+      else if (key === "INTRO") w.introPara = num;
+      else if (key === "WINPARA") w.winPara = num;
+      else if (key === "LOSEPARA") w.losePara = num;
+      else if (key === "BOOKLET") w.worldFlags = num ? (w.worldFlags | WF_BOOKLET) : (w.worldFlags & ~WF_BOOKLET);
     } else if (section === "room" && cur) {
       if (key === "NAME") cur.name = val;
       else if (key === "DESC") cur.desc = val;
       else if (DIRS.includes(key.toLowerCase())) cur.exits[key.toLowerCase()] = num;
       else if (key === "POINTS") cur.points = num;
+      else if (key === "FIRSTVISIT") cur.firstVisitPara = num;
     } else if (section === "object" && cur) {
       if (key === "NAME") cur.name = val;
       else if (key === "DESC") cur.desc = val;
@@ -635,13 +809,16 @@ function readText(src) {
       else if (key === "FLAGS") { const u = val.toUpperCase(); FLAGS.forEach(f => cur.flags[f] = u.includes(f.toUpperCase())); }
       else if (key === "USETEXT") cur.useText = val;
       else if (key === "POINTS") cur.points = num;
+      else if (key === "FIRSTTAKE") cur.firstTakePara = num;
     } else if (section === "mob" && cur) {
       if (key === "NAME") cur.name = val;
       else if (key === "DESC") cur.desc = val;
       else if (key === "ROOM") cur.roomID = num;
       else if (key === "DIALOGUE") cur.dialogue = val;
+      else if (key === "FIRSTTALK") cur.firstTalkPara = num;
     }
   }
+  flushPara();
   return w;
 }
 
@@ -650,6 +827,22 @@ function readText(src) {
    A closing brace inside a value would end the tag early, so braces are
    stripped on the way out. */
 const bplSafe = s => oneLine(s).replace(/[{}]/g, "");
+// A tag value is one line and cannot hold braces, so paragraph breaks travel
+// as a backslash-n escape. Mirrors EncodeParaText/DecodeParaText in bplpars.pas.
+const bplEncodePara = s => String(s)
+  .replace(/\\/g, "\\\\")
+  .replace(/\{/g, "(").replace(/\}/g, ")")
+  .replace(/\r\n|\r|\n/g, "\\n");
+function bplDecodePara(s) {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && i + 1 < s.length) {
+      i++;
+      out += s[i] === "n" ? "\r\n" : s[i];
+    } else out += s[i];
+  }
+  return out;
+}
 
 function writeBPL() {
   const L = [];
@@ -657,24 +850,29 @@ function writeBPL() {
   L.push("# Generated by the Secret Orb web editor");
   L.push("");
   L.push("{START:WORLD}");
-  L.push("{REVISION:2}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
+  L.push("{REVISION:3}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
   if (world.winRoomID > 0 || world.winObjectID > 0)
     L.push("{WINROOM:" + (world.winRoomID | 0) + "}{WINOBJ:" + (world.winObjectID | 0) + "}");
+  if (world.introPara > 0 || world.winPara > 0 || world.losePara > 0)
+    L.push("{INTRO:" + (world.introPara | 0) + "}{WINPARA:" + (world.winPara | 0) +
+           "}{LOSEPARA:" + (world.losePara | 0) + "}");
+  if (bookletMode()) L.push("{BOOKLET:1}");
   L.push("{END}");
   L.push("");
   for (const r of world.rooms) {
     L.push("{START:ROOM}");
-    L.push("{REVISION:2}");
+    L.push("{REVISION:3}");
     L.push("{OC:" + r.id + "}{VAR:R" + r.id + "}{NAME:" + bplSafe(r.name) + "}+++");
     L.push("{DESC:" + bplSafe(r.desc) + "}+++");
     L.push(DIRS.map(d => "{" + d.toUpperCase() + ":" + (r.exits[d] | 0) + "}").join(""));
     if (r.points > 0) L.push("{POINTS:" + r.points + "}");
+    if (r.firstVisitPara > 0) L.push("{FIRSTVISIT:" + r.firstVisitPara + "}");
     L.push("{END}");
     L.push("");
   }
   for (const o of world.objects) {
     L.push("{START:OBJECT}");
-    L.push("{REVISION:2}");
+    L.push("{REVISION:3}");
     L.push("{OC:" + o.id + "}{VAR:O" + o.id + "}{NAME:" + bplSafe(o.name) + "}+++");
     L.push("{DESC:" + bplSafe(o.desc) + "}+++");
     let line = "{ROOM:" + (o.roomID | 0) + "}";
@@ -684,16 +882,27 @@ function writeBPL() {
     L.push(line + "+++");
     if (o.useText) L.push("{USETEXT:" + bplSafe(o.useText) + "}");
     if (o.points > 0) L.push("{POINTS:" + o.points + "}");
+    if (o.firstTakePara > 0) L.push("{FIRSTTAKE:" + o.firstTakePara + "}");
     L.push("{END}");
     L.push("");
   }
   for (const m of world.mobs) {
     L.push("{START:MOB}");
-    L.push("{REVISION:2}");
+    L.push("{REVISION:3}");
     L.push("{OC:" + m.id + "}{VAR:M" + m.id + "}{NAME:" + bplSafe(m.name) + "}+++");
     L.push("{DESC:" + bplSafe(m.desc) + "}+++");
     L.push("{ROOM:" + (m.roomID | 0) + "}");
     if (m.dialogue) L.push("{DIALOGUE:" + bplSafe(m.dialogue) + "}");
+    if (m.firstTalkPara > 0) L.push("{FIRSTTALK:" + m.firstTalkPara + "}");
+    L.push("{END}");
+    L.push("");
+  }
+  // OC is the booklet number, so gaps are preserved.
+  for (const n of paraNumbers()) {
+    L.push("{START:PARAGRAPH}");
+    L.push("{REVISION:3}");
+    L.push("{OC:" + n + "}");
+    L.push("{TEXT:" + bplEncodePara(world.paragraphs[n]) + "}");
     L.push("{END}");
     L.push("");
   }
@@ -702,7 +911,7 @@ function writeBPL() {
 
 function readBPL(src) {
   const w = blankWorld();
-  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB"];
+  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB", "PARAGRAPH"];
   let full = "", inBlock = false, type = "", t = null;
 
   const flush = () => {
@@ -712,6 +921,7 @@ function readBPL(src) {
       r.name = t.NAME || ""; r.desc = t.DESC || "";
       DIRS.forEach(d => r.exits[d] = parseInt(t[d.toUpperCase()] || "0", 10) || 0);
       r.points = parseInt(t.POINTS || "0", 10) || 0;
+      r.firstVisitPara = parseInt(t.FIRSTVISIT || "0", 10) || 0;
       w.rooms.push(r);
     } else if (type === "OBJECT") {
       const o = newObject(t.oc || w.objects.length + 1);
@@ -722,13 +932,20 @@ function readBPL(src) {
       FLAGS.forEach(f => o.flags[f] = fl.includes(f.toUpperCase()));
       o.useText = t.USETEXT || "";
       o.points = parseInt(t.POINTS || "0", 10) || 0;
+      o.firstTakePara = parseInt(t.FIRSTTAKE || "0", 10) || 0;
       w.objects.push(o);
     } else if (type === "MOB") {
       const m = newMob(t.oc || w.mobs.length + 1);
       m.name = t.NAME || ""; m.desc = t.DESC || "";
       m.roomID = parseInt(t.ROOM || "0", 10) || 0;
       m.dialogue = t.DIALOGUE || "";
+      m.firstTalkPara = parseInt(t.FIRSTTALK || "0", 10) || 0;
       w.mobs.push(m);
+    } else if (type === "PARAGRAPH") {
+      // Keyed by plain number, not a VAR, so booklet numbering is explicit
+      const n = t.oc | 0;
+      if (n >= 1 && n <= LIM.PARAGRAPHS && t.TEXT)
+        w.paragraphs[n] = bplDecodePara(t.TEXT).slice(0, LIM.PARA_LEN);
     }
     inBlock = false; type = ""; t = null;
   };
@@ -754,6 +971,10 @@ function readBPL(src) {
       else if (key === "START") w.startRoom = parseInt(val.replace(/^[A-Za-z]+/, ""), 10) || 1;
       else if (key === "WINROOM") w.winRoomID = parseInt(val, 10) || 0;
       else if (key === "WINOBJ") w.winObjectID = parseInt(val, 10) || 0;
+      else if (key === "INTRO") w.introPara = parseInt(val, 10) || 0;
+      else if (key === "WINPARA") w.winPara = parseInt(val, 10) || 0;
+      else if (key === "LOSEPARA") w.losePara = parseInt(val, 10) || 0;
+      else if (key === "BOOKLET") w.worldFlags = (parseInt(val, 10) || 0) ? (w.worldFlags | WF_BOOKLET) : (w.worldFlags & ~WF_BOOKLET);
       else if (key === "DESCRIPTION") t.DESC = val;
       else t[key] = val;
     }
@@ -1050,10 +1271,29 @@ function startGame() {
   const start = roomById(world.startRoom);
   document.getElementById("screen").innerHTML = "";
   if (!start) { say("No start room — set one in the world bar.", "msg"); game.over = true; return; }
+  game.talked = new Set();
+  showParagraph(world.introPara);
   game.visited.add(start.id);
   game.score += start.points | 0;
+  // The start room never goes through move(), so its scene plays here
+  showParagraph(start.firstVisitPara);
   describe();
   updateStatus();
+}
+
+// Every story paragraph reaches the player through here, so booklet mode is
+// honoured in one place, exactly as ShowParagraph does in gamecore.pas.
+function showParagraph(num) {
+  const n = num | 0;
+  if (!n) return;
+  const body = world.paragraphs[n];
+  if (!body) return;
+  say("");
+  if (bookletMode()) {
+    say("\u00bb Read paragraph " + n + " in your booklet.", "win");
+    return;
+  }
+  for (const line of String(body).split(/\r?\n/)) say(line, "para");
 }
 
 function say(text, cls) {
@@ -1098,6 +1338,7 @@ function checkWin() {
   if (!world.winRoomID || game.room !== world.winRoomID) return;
   if (world.winObjectID && !game.inv.includes(world.winObjectID)) return;
   game.over = true;
+  showParagraph(world.winPara);
   say("");
   say("*** YOU HAVE WON ***", "win");
   say(world.title, "win");
@@ -1114,11 +1355,14 @@ function move(dir) {
   if (!dest) { say("That path leads nowhere.", "msg"); return; }
   game.room = target;
   let msg = "You go " + DIR_LABEL[dir] + ".";
+  let arrival = 0;
   if (!game.visited.has(target)) {
     game.visited.add(target);
     if (dest.points > 0) { game.score += dest.points; msg += " [+" + dest.points + "]"; }
+    arrival = dest.firstVisitPara | 0;
   }
   say(msg, "msg");
+  showParagraph(arrival);
   describe();
 }
 
@@ -1177,11 +1421,14 @@ function runCommand(input) {
       game.inv.push(o.id);
       game.place.set(o.id, { roomID: 0, carriedBy: 0 });
       let msg = "You take the " + o.name + ".";
+      let firstTake = 0;
       if (!game.taken.has(o.id)) {
         game.taken.add(o.id);
         if (o.points > 0) { game.score += o.points; msg += " [+" + o.points + "]"; }
+        firstTake = o.firstTakePara | 0;
       }
       say(msg, "msg");
+      showParagraph(firstTake);
       break;
     }
     case "drop": {
@@ -1211,6 +1458,10 @@ function runCommand(input) {
       const m = findMob(who);
       if (!m) { say("There's no one here by that name.", "msg"); break; }
       say(m.dialogue ? m.name + ' says: "' + m.dialogue + '"' : m.name + " has nothing to say.", "msg");
+      if (!game.talked.has(m.id)) {
+        game.talked.add(m.id);
+        showParagraph(m.firstTalkPara | 0);
+      }
       break;
     }
     case "inventory": {
@@ -1270,6 +1521,7 @@ function showTab(name) {
     if (!game || gameStale) startGame();
     setTimeout(() => $("cmdInput").focus(), 0);
   }
+  if (name === "story") renderParaList();
   if (["rooms", "objects", "mobs"].includes(name)) renderList(name);
 }
 
@@ -1285,6 +1537,10 @@ function renderWorldBar() {
   $("wStart").value = world.startRoom;
   $("wWinRoom").value = world.winRoomID;
   $("wWinObj").value = world.winObjectID;
+  $("wIntro").value = world.introPara;
+  $("wWinPara").value = world.winPara;
+  $("wLosePara").value = world.losePara;
+  $("wBooklet").checked = bookletMode();
   counterFor($("cTitle"), world.title, LIM.TITLE);
   $("sScore").textContent = maxScore();
   $("sCounts").textContent = world.rooms.length + " rooms, " +
@@ -1292,6 +1548,7 @@ function renderWorldBar() {
   $("bRooms").textContent = world.rooms.length;
   $("bObjects").textContent = world.objects.length;
   $("bMobs").textContent = world.mobs.length;
+  $("bParas").textContent = paraNumbers().length;
   const issues = validate();
   const bad = issues.filter(i => i.level === "error").length;
   const badge = $("bIssues");
@@ -1302,6 +1559,7 @@ function renderWorldBar() {
 function renderAll() {
   renderWorldBar();
   ["rooms", "objects", "mobs"].forEach(renderList);
+  renderParaList();
   const active = document.querySelector("nav button[aria-selected=true]");
   if (active && active.dataset.tab === "map") renderMap();
   if (active && active.dataset.tab === "check") renderIssues();
@@ -1381,6 +1639,12 @@ function renderForm(kind) {
   if (kind !== "mobs")
     inner += '<div class="field" style="flex:0 0 96px"><label for="f-points">Points</label>' +
              '<input type="number" id="f-points" min="0" step="1" value="' + (e.points | 0) + '"></div>';
+  const paraField = { rooms: "firstVisitPara", objects: "firstTakePara", mobs: "firstTalkPara" }[kind];
+  const paraLabel = { rooms: "First visit \u00b6", objects: "First take \u00b6", mobs: "First talk \u00b6" }[kind];
+  inner += '<div class="field" style="flex:0 0 110px"><label for="f-para" title="Story paragraph number, 0 for none">' +
+           paraLabel + '</label>' +
+           '<input type="number" id="f-para" min="0" max="' + LIM.PARAGRAPHS + '" step="1" value="' +
+           (e[paraField] | 0) + '"></div>';
   inner += "</div>";
 
   const descMax = kind === "rooms" ? LIM.ROOM_DESC : LIM.OBJ_DESC;
@@ -1392,7 +1656,7 @@ function renderForm(kind) {
       inner += '<div><label for="f-ex-' + d + '">' + DIR_LABEL[d] + "</label>" +
                '<select id="f-ex-' + d + '">' + roomOptions(e.exits[d] | 0, true, "— none —") + "</select></div>";
     inner += "</div></div>";
-    inner += '<p class="hint">Points are scored the first time the player enters this room.</p>';
+    inner += '<p class="hint">Points and the first-visit paragraph both fire once, on arrival.</p>';
   } else if (kind === "objects") {
     inner += '<div class="row">' +
       '<div class="field"><label for="f-room">In room</label><select id="f-room">' +
@@ -1406,11 +1670,12 @@ function renderForm(kind) {
       FLAGS.map(f => '<label><input type="checkbox" id="f-flag-' + f + '"' +
         (e.flags[f] ? " checked" : "") + "> " + f + "</label>").join("") + "</div></div>";
     inner += textField("f-usetext", "Use text — shown for USE, OPEN and READ", e.useText, LIM.USE_TEXT, true);
-    inner += '<p class="hint">Points are scored the first time the player takes this object.</p>';
+    inner += '<p class="hint">Points and the first-take paragraph both fire once, on first take.</p>';
   } else {
     inner += '<div class="field"><label for="f-room">In room</label><select id="f-room">' +
       roomOptions(e.roomID | 0, true, "— nowhere —") + "</select></div>";
     inner += textField("f-dialogue", "Dialogue", e.dialogue, LIM.DIALOGUE, true);
+    inner += '<p class="hint">The first-talk paragraph plays once, the dialogue line every time.</p>';
   }
 
   inner += '<div class="formfoot">';
@@ -1443,6 +1708,13 @@ function renderForm(kind) {
   const pts = $("f-points");
   if (pts) pts.addEventListener("input", () => {
     e.points = Math.max(0, parseInt(pts.value, 10) || 0);
+    renderWorldBar(); renderListRowsOnly(kind);
+  });
+
+  const paraIn = $("f-para");
+  if (paraIn) paraIn.addEventListener("input", () => {
+    const n = Math.max(0, Math.min(LIM.PARAGRAPHS, parseInt(paraIn.value, 10) || 0));
+    e[paraField] = n;
     renderWorldBar(); renderListRowsOnly(kind);
   });
 
@@ -1499,6 +1771,159 @@ function renderForm(kind) {
     sel[kind] = null;
     renderAll();
   });
+}
+
+/* ============================================================================
+   Story paragraphs
+   ========================================================================== */
+let selPara = null;
+
+const paraPreview = s => String(s).replace(/[\r\n]+/g, " ").slice(0, 70);
+
+// Everywhere a paragraph number is referenced, so the list can show what uses it
+function paraUsers(n) {
+  const out = [];
+  if ((world.introPara | 0) === n) out.push("intro");
+  if ((world.winPara | 0) === n) out.push("win");
+  if ((world.losePara | 0) === n) out.push("lose");
+  for (const r of world.rooms) if ((r.firstVisitPara | 0) === n) out.push("room " + r.id);
+  for (const o of world.objects) if ((o.firstTakePara | 0) === n) out.push("obj " + o.id);
+  for (const m of world.mobs) if ((m.firstTalkPara | 0) === n) out.push("mob " + m.id);
+  return out;
+}
+
+function renderParaList() {
+  const ul = $("listParas");
+  if (!ul) return;
+  const nums = paraNumbers();
+  ul.innerHTML = "";
+  if (!nums.length) {
+    ul.innerHTML = '<li class="empty" style="cursor:default">No paragraphs yet.</li>';
+  } else {
+    for (const n of nums) {
+      const li = document.createElement("li");
+      li.setAttribute("aria-current", String(selPara === n));
+      const users = paraUsers(n);
+      li.innerHTML = '<span class="id"></span><span class="nm"></span><span class="tag"></span>';
+      li.querySelector(".id").textContent = n;
+      li.querySelector(".nm").textContent = paraPreview(world.paragraphs[n]) || "(empty)";
+      li.querySelector(".tag").textContent = users.length ? users.join(", ") : "unused";
+      li.addEventListener("click", () => { selPara = n; renderParaList(); });
+      ul.appendChild(li);
+    }
+  }
+  renderParaForm();
+}
+
+function renderParaForm() {
+  const box = $("formPara");
+  if (!box) return;
+  if (!selPara || !world.paragraphs[selPara]) {
+    box.innerHTML = '<p class="empty">Select a paragraph, or add a new one.</p>';
+    return;
+  }
+  const n = selPara;
+  const users = paraUsers(n);
+  box.innerHTML =
+    "<h3>Paragraph " + n + "</h3>" +
+    '<div class="field">' +
+    '<label for="p-text">Text <span class="counter" id="c-p-text"></span></label>' +
+    '<textarea id="p-text" rows="14">' + escapeHtml(world.paragraphs[n]) + "</textarea></div>" +
+    '<p class="hint">' + (users.length
+      ? "Shown for: " + escapeHtml(users.join(", ")) + "."
+      : "Nothing refers to this paragraph yet.") +
+    " Blank lines are kept as paragraph breaks." + (bookletMode()
+      ? " Booklet mode is on, so the game cites this number instead of printing the text."
+      : "") + "</p>" +
+    '<div class="row">' +
+    '<div class="field" style="flex:0 0 130px"><label for="p-num">Renumber to</label>' +
+    '<input type="number" id="p-num" min="1" max="' + LIM.PARAGRAPHS + '" step="1" value="' + n + '"></div>' +
+    "</div>" +
+    '<div class="formfoot"><span class="spacer"></span>' +
+    '<button class="danger" id="p-delete">Delete paragraph</button></div>';
+
+  const ta = $("p-text");
+  counterFor($("c-p-text"), ta.value, LIM.PARA_LEN);
+  ta.addEventListener("input", () => {
+    world.paragraphs[n] = ta.value.slice(0, LIM.PARA_LEN);
+    counterFor($("c-p-text"), ta.value, LIM.PARA_LEN);
+    renderWorldBar();
+    // Refresh only the preview text, so the textarea keeps focus
+    const rows = $("listParas").querySelectorAll("li");
+    const idx = paraNumbers().indexOf(n);
+    if (idx >= 0 && rows[idx] && rows[idx].querySelector(".nm"))
+      rows[idx].querySelector(".nm").textContent = paraPreview(world.paragraphs[n]) || "(empty)";
+  });
+
+  $("p-num").addEventListener("change", () => {
+    const want = parseInt($("p-num").value, 10) || 0;
+    if (want < 1 || want > LIM.PARAGRAPHS) {
+      toast("Paragraph numbers run 1 to " + LIM.PARAGRAPHS + ".", true);
+      $("p-num").value = n; return;
+    }
+    if (want === n) return;
+    if (world.paragraphs[want]) {
+      toast("Paragraph " + want + " already exists.", true);
+      $("p-num").value = n; return;
+    }
+    // Renumbering must carry every reference with it, or a booklet stops matching
+    world.paragraphs[want] = world.paragraphs[n];
+    delete world.paragraphs[n];
+    if ((world.introPara | 0) === n) world.introPara = want;
+    if ((world.winPara | 0) === n) world.winPara = want;
+    if ((world.losePara | 0) === n) world.losePara = want;
+    for (const r of world.rooms) if ((r.firstVisitPara | 0) === n) r.firstVisitPara = want;
+    for (const o of world.objects) if ((o.firstTakePara | 0) === n) o.firstTakePara = want;
+    for (const m of world.mobs) if ((m.firstTalkPara | 0) === n) m.firstTalkPara = want;
+    selPara = want;
+    renderAll();
+    toast("Renumbered to " + want + ", references updated.");
+  });
+
+  $("p-delete").addEventListener("click", () => {
+    const u = paraUsers(n);
+    const warn = "Delete paragraph " + n + "?" +
+      (u.length ? "\n\nStill referenced by: " + u.join(", ") +
+                  ". Those will be left pointing at nothing." : "") +
+      "\n\nThe number stays unused so a printed booklet keeps matching.";
+    if (!confirm(warn)) return;
+    delete world.paragraphs[n];
+    selPara = null;
+    renderAll();
+  });
+}
+
+function addParagraph() {
+  let n = 1;
+  while (n <= LIM.PARAGRAPHS && world.paragraphs[n]) n++;
+  if (n > LIM.PARAGRAPHS) { toast("All " + LIM.PARAGRAPHS + " paragraph slots are used.", true); return; }
+  world.paragraphs[n] = "";
+  selPara = n;
+  renderAll();
+  showTab("story");
+  setTimeout(() => { const t = $("p-text"); if (t) t.focus(); }, 0);
+}
+
+// A printable booklet: the same numbers the game cites, ready to hand to a player.
+function buildBooklet() {
+  const esc = escapeHtml;
+  const parts = paraNumbers().map(n =>
+    '<section><h2>' + n + "</h2><div>" +
+    world.paragraphs[n].split(/\r?\n/).map(l => "<p>" + esc(l) + "</p>").join("") +
+    "</div></section>");
+  return "<!doctype html><html><head><meta charset=\"utf-8\">" +
+    "<title>" + esc(world.title) + " — Booklet</title><style>" +
+    "body{font:12pt/1.5 Georgia,serif;max-width:40em;margin:2em auto;padding:0 1em}" +
+    "h1{font-size:1.6em;margin-bottom:0}" +
+    ".sub{color:#555;margin-top:.3em}" +
+    "section{break-inside:avoid;margin:1.6em 0;border-top:1px solid #ccc;padding-top:.6em}" +
+    "h2{font-size:1em;letter-spacing:.1em;color:#666;margin:0 0 .4em}" +
+    "p{margin:0 0 .6em}p:empty{margin:0;height:.6em}" +
+    "@media print{body{margin:0}}" +
+    "</style></head><body>" +
+    "<h1>" + esc(world.title) + "</h1>" +
+    '<p class="sub">Do not read ahead. Read each paragraph only when the game tells you to.</p>' +
+    parts.join("") + "</body></html>";
 }
 
 // Redraw list labels without rebuilding the form (which would steal focus while typing)
@@ -1559,14 +1984,31 @@ document.querySelectorAll("nav button").forEach(b =>
   b.addEventListener("click", () => showTab(b.dataset.tab)));
 
 $("wTitle").addEventListener("input", e => { world.title = e.target.value; renderWorldBar(); });
-["wStart", "wWinRoom", "wWinObj"].forEach(id =>
+["wStart", "wWinRoom", "wWinObj", "wIntro", "wWinPara", "wLosePara"].forEach(id =>
   $(id).addEventListener("input", e => {
     const v = Math.max(0, parseInt(e.target.value, 10) || 0);
     if (id === "wStart") world.startRoom = v;
     else if (id === "wWinRoom") world.winRoomID = v;
-    else world.winObjectID = v;
+    else if (id === "wWinObj") world.winObjectID = v;
+    else if (id === "wIntro") world.introPara = v;
+    else if (id === "wWinPara") world.winPara = v;
+    else world.losePara = v;
     renderWorldBar();
+    if (id !== "wStart" && id !== "wWinRoom" && id !== "wWinObj") renderParaList();
   }));
+$("wBooklet").addEventListener("change", e => {
+  world.worldFlags = e.target.checked ? (world.worldFlags | WF_BOOKLET)
+                                      : (world.worldFlags & ~WF_BOOKLET);
+  renderWorldBar();
+  renderParaList();
+});
+
+$("addPara").addEventListener("click", addParagraph);
+$("exportBooklet").addEventListener("click", () => {
+  if (!paraNumbers().length) return toast("There are no paragraphs to print yet.", true);
+  download("booklet.html", buildBooklet(), "text/html");
+  toast("Booklet exported. Open it and print to PDF.");
+});
 
 $("addRoom").addEventListener("click", () => {
   if (world.rooms.length >= LIM.ROOMS) return toast("The engine allows at most " + LIM.ROOMS + " rooms.", true);

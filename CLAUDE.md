@@ -90,12 +90,54 @@ The codebase is organized into modular units in `pascal/src/`:
     won by reaching `WinRoomID` while carrying `WinObjectID`; either may be 0 to
     disable that half of the condition. Meta commands (help, score, save, load,
     quit) do not consume a turn
+  - Story paragraphs: long-form scene text that fires at a moment rather than on
+    demand. Every paragraph reaches the player through one private helper,
+    `ShowParagraph`, so the per-world booklet flag is honoured in exactly one
+    place. The six trigger sites are:
+
+    | Trigger | Where |
+    |---------|-------|
+    | `World.IntroPara` | `RunGame`, before the loop |
+    | `Room.FirstVisitPara` | `MovePlayer`, where `Visited` is set — **and** the start-room block in `RunGame`, which bypasses `MovePlayer` |
+    | `Object.FirstTakePara` | `HandleTake`, where `Taken` is set |
+    | `Mob.FirstTalkPara` | `HandleTalk`, guarded by the new `World.Talked` bitmap |
+    | `World.WinPara` | `ShowEnding`, before the score summary |
+    | `World.LosePara` | `RunGame`, when the loop ends without `gsWon` — quitting is its own ending |
+
+    Because the three trigger bitmaps are the same ones scoring already used and
+    the save format already stored, a restored game never replays a scene.
+
+### Story Paragraphs and the Booklet
+
+A world carries up to `MAX_PARAGRAPHS` (128) numbered paragraphs of up to
+`MAX_PARA_LEN` (1600) characters. **A paragraph's number is its array index and is
+never reused or shifted** — deleting paragraph 7 blanks slot 7 rather than compacting,
+because those numbers get printed in a booklet and must not move under the player.
+`SetParagraph` in gamedata.pas enforces this; `ParaCount` tracks the highest used slot.
+
+`TParagraphArray` is explicitly `AnsiString` (`TParaText`), not `string`. These units
+compile with short strings on, where a plain `string` is a 256-byte `ShortString` —
+too short for a paragraph, and an array of 128 of them would be 32KB of static data
+instead of a table of pointers. Nothing ever `BlockWrite`s or `FillChar`s
+`TGameWorld` wholesale, which is what makes refcounted fields in that record safe.
+
+Setting `WF_BOOKLET` in `World.WorldFlags` switches the engine from printing a
+paragraph to citing it (`Read paragraph 12 in your booklet.`) — the Wasteland
+copy-protection move. It is off by default. All three editors can export a printable
+booklet whose numbering matches what the game cites.
+
+Display support lives in display.pas: `WrapText` is the single word-wrap
+implementation (`WriteWrapped` is a thin caller), and `ShowTextPage` pages anything
+longer than a screen with a `-- More --` prompt.
 
 ### Program Entry Points
 
 - **secretorb.pas**: Game launcher
-  - Shows title screen
-  - Loads world file (default: `world.dat` or command-line argument)
+  - Loads the world *first*, then shows the title screen, so the title screen can
+    name the world. **`secorb.pas` is a byte-identical DOS 8.3 duplicate driven by
+    `BUILD.BAT` — any change here must be mirrored there or the FreeDOS build
+    silently diverges.**
+  - World file defaults to `world.dat`, or a command-line argument
   - Hands off to `RunGame` in gamecore.pas
 
 - **editor.pas**: World editor TUI
@@ -111,29 +153,62 @@ World files support two formats with automatic detection:
 #### Binary Format (Default)
 
 The editor saves in binary format by default for space efficiency. Current version
-is **2**; version 1 files still load, with the new fields defaulting to 0 and the
-title derived from the file name. Saves always write version 2.
+is **3**; versions 1 and 2 still load, with the new fields defaulting to 0 and (for
+version 1) the title derived from the file name. Saves always write version 3.
 
-- **Header**: Magic signature 'SORB', version, counts, start room, title,
-  win room ID, win object ID, max score
-- **Rooms**: Packed TRoomBinV2 records — 6 directions plus first-visit `Points`
-- **Objects**: Packed TGameObjectBinV2 records — plus first-take `Points`
-- **Mobs**: Packed TMobBinV2 records
+- **Header**: 69 bytes — magic signature 'SORB', version, counts, start room, title,
+  win room ID, win object ID, max score, then the story fields
+- **Rooms**: Packed TRoomBinV3 records — 317 bytes
+- **Objects**: Packed TGameObjectBinV3 records — 246 bytes
+- **Mobs**: Packed TMobBinV3 records — 343 bytes
+- **Paragraphs**: a trailing variable-length section
+
+Version 3 keeps the header at exactly 69 bytes: the eight bytes that were `Reserved`
+in version 2 are now named fields, and version 2 writers already zero-filled them.
+
+| Offset | Field |
+|--------|-------|
+| 61 | `IntroPara: Word` |
+| 63 | `WinPara: Word` |
+| 65 | `LosePara: Word` |
+| 67 | `WorldFlags: Byte` (bit 0 = `WF_BOOKLET`) |
+| 68 | `Reserved: Byte` |
+
+Each version 3 entity record is its version 2 record with **one Word appended**, so
+the layouts stay trivially derivable: `FirstVisitPara` at room +315, `FirstTakePara`
+at object +244, `FirstTalkPara` at mob +341. The paragraph section follows the mob
+records and is self-describing:
+
+```
+Word  ParaCount              { highest used number, not a count of non-empty }
+repeat ParaCount times:
+  Word         Length        { 0 = unused slot, so numbering survives a deletion }
+  Byte[Length] text          { Latin-1, #13#10 for hard line breaks }
+```
 
 The loader reads the 4-byte magic and version prefix *first*, then dispatches to a
-version-specific header layout. A version 1 file is shorter than a version 2 header,
-so the layout must be chosen before reading any further.
+version-specific layout. A version 1 file is shorter than a version 2 header, so the
+layout must be chosen before reading any further. Versions 2 and 3 share a reader
+(`ReadBinaryV2Or3`) because they differ only by the appended Word and the paragraph
+section; the version 3 header fields are explicitly zeroed when reading an older file
+rather than trusted.
 
 Format validation: Magic signature check, version dispatch, IOResult error handling.
 
 #### Save Games
 
-Save games are a separate file format from world files: magic 'SORS', version 1,
+Save games are a separate file format from world files: magic 'SORS', version **2**,
 written by `SaveGameState` / read by `LoadGameState` in datafile.pas. A save stores
-position, score, turns, inventory, object and mob placement, and the visited/taken
-bitmaps — but no world definition. The header carries a `WorldSig` fingerprint of the
-world; restoring a save whose signature does not match, or whose body length is wrong,
-is refused outright rather than half-applied.
+position, score, turns, inventory, object and mob placement, and the
+visited/taken/talked bitmaps — but no world definition. The header carries a
+`WorldSig` fingerprint of the world; restoring a save whose signature does not match,
+or whose body length is wrong, is refused outright rather than half-applied. The
+expected body length is version-aware: version 1 saves predate the `Talked` bitmap
+and are exactly 8 bytes shorter, so they still load with `Talked` zero-filled.
+
+Those three bitmaps are also what gate the first-visit / first-take / first-talk
+story paragraphs, so saving them is what stops a restored game replaying scenes.
+No separate "paragraphs already seen" state is needed.
 
 #### Text Format (Legacy/Manual Editing)
 
@@ -145,6 +220,10 @@ TITLE=Game Title
 START=1
 WINROOM=room_id
 WINOBJECT=object_id
+INTRO=paragraph shown before the first room
+WINPARA=paragraph shown on winning
+LOSEPARA=paragraph shown when quitting without winning
+BOOKLET=0
 
 [ROOM:id]
 NAME=Room Name
@@ -156,6 +235,7 @@ WEST=room_id
 UP=room_id
 DOWN=room_id
 POINTS=score awarded on first visit
+FIRSTVISIT=paragraph played on first visit
 
 [OBJECT:id]
 NAME=Object Name
@@ -165,12 +245,24 @@ CARRIEDBY=mob_id
 FLAGS=pickup,use,open,read
 USETEXT=Text shown when used
 POINTS=score awarded on first take
+FIRSTTAKE=paragraph played on first take
 
 [MOB:id]
 NAME=Mob Name
 DESC=Description
 ROOM=room_id
 DIALOGUE=What the mob says
+FIRSTTALK=paragraph played on first talk
+
+[PARAGRAPH:12]
+The body of a paragraph is literal text, not key=value, so it can span
+lines and keep its blank lines as paragraph breaks.
+
+Only a real section header ends it — `IsSectionHeader` in datafile.pas
+recognises exactly `[WORLD]`, `[ROOM:`, `[OBJECT:`, `[MOB:` and
+`[PARAGRAPH:`, so an ordinary body line may begin with a bracket. A body
+line that starts with one of those five spellings would be misread; the
+binary format has no such ambiguity.
 ```
 
 #### Format Conversion
@@ -239,16 +331,25 @@ make editors     # Builds both editors
 There is also **web/editor.html**: a single self-contained HTML file (no build step,
 no dependencies, no network access) served from the project site at
 `/web/editor.html`. It reads and writes all three world formats, so its byte layout
-for binary v2 must stay in step with the packed records in `datafile.pas` — the
+for binary v3 must stay in step with the packed records in `datafile.pas` — the
 record sizes and field offsets are written down in comments next to its
-`writeBinary` function. It also carries a browser copy of the engine's command
-handling for playtesting, which mirrors `gamecore.pas`.
+`writeBinary` function, and any drift garbles every record. It also carries a browser
+copy of the engine's command handling for playtesting, which mirrors `gamecore.pas`
+(including `showParagraph`, the browser twin of `ShowParagraph`), plus a Story tab
+and a printable HTML booklet export.
 
 The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provides:
 - Menu bar with keyboard shortcuts (F2 Save, F3 Open, Alt+X Exit)
 - Dialog-based forms for all entity types
 - Scrollable list views with Edit/Delete operations
 - Checkbox-based flag editing for objects
+- A Story menu with a `PMemo`-based paragraph editor and booklet export. This is the
+  only place the `Editors` unit is used; `editor-tv` is excluded from the `dos32`,
+  `dos` and `win32` targets, so that dependency never reaches those builds.
+
+The lightweight `editor.pas` edits a paragraph as a `MAX_PARA_LINES` × 74 grid of
+`ReadLine` calls joined with `#13#10`, because it has no multi-line control. All
+three editors can write a booklet whose numbering matches what the game cites.
 
 ---
 
@@ -665,13 +766,27 @@ end;
 
 When implementing these features, increment the binary format version:
 - Version 1: basic rooms, objects, mobs
-- Version 2 (current): world title, win condition, per-room and per-object points
-- Version 3: Add events, flags, counters
-- Version 4: Add dialogue trees
-- Version 5: Add object states, containers, combinations
+- Version 2: world title, win condition, per-room and per-object points
+- Version 3 (current): story paragraphs, intro and endings, booklet mode
+- Version 4: Add events, flags, counters
+- Version 5: Add dialogue trees
+- Version 6: Add object states, containers, combinations
 
-BPL carries the same fields via `{WINROOM:n}` and `{WINOBJ:n}` in the WORLD block and
-`{POINTS:n}` in ROOM/OBJECT blocks, at `{REVISION:2}`; revision 1 files still load.
+The paragraph store is the intended payload for Phase 1's `atShowMessage`: once the
+event system arrives, an action can carry a paragraph number instead of inline text,
+and the booklet stays a single source of truth for long-form prose.
+
+BPL carries the same fields at `{REVISION:3}`; earlier revisions still load:
+- WORLD: `{WINROOM:n}`, `{WINOBJ:n}`, `{INTRO:n}`, `{WINPARA:n}`, `{LOSEPARA:n}`, `{BOOKLET:1}`
+- ROOM: `{POINTS:n}`, `{FIRSTVISIT:n}`
+- OBJECT: `{POINTS:n}`, `{FIRSTTAKE:n}`
+- MOB: `{FIRSTTALK:n}`
+- `{START:PARAGRAPH}` blocks with `{OC:n}` and `{TEXT:...}`
+
+A BPL tag value is one line and cannot contain braces, so paragraph line breaks
+travel as a `\n` escape (`EncodeParaText`/`DecodeParaText` in bplpars.pas). Paragraphs
+are keyed by plain number rather than a `{VAR:Pn}` cross-reference, which keeps the
+booklet number the author wrote and sidesteps the unimplemented VAR-resolution pass.
 
 Maintain backward compatibility: newer engine loads older formats, fills defaults.
 

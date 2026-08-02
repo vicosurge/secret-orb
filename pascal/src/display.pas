@@ -11,12 +11,20 @@ uses
 const
   SCREEN_WIDTH = 80;
   SCREEN_HEIGHT = 25;
+  MAX_WRAP_LINES = 64;
+  PRESS_ANY_KEY = 'Press any key to continue...';
+
+type
+  TWrapLines = array[1..MAX_WRAP_LINES] of string;
 
 procedure InitDisplay;
 procedure ClearScreen;
 procedure WriteAt(X, Y: Integer; const S: string);
 procedure WriteCenter(Y: Integer; const S: string);
 procedure WriteWrapped(X, Y, Width: Integer; const S: string);
+function WrapText(const S: AnsiString; Width: Integer;
+                  var Lines: TWrapLines; MaxLines: Integer): Integer;
+procedure ShowTextPage(const Heading: string; const Body: AnsiString);
 procedure SetColor(FG, BG: Byte);
 procedure ResetColor;
 procedure WaitKey;
@@ -25,6 +33,11 @@ procedure DrawBox(X1, Y1, X2, Y2: Integer);
 procedure DrawHLine(X1, X2, Y: Integer);
 
 implementation
+
+{ Shared scratch buffer. A TWrapLines is 16KB, which is more than we want on
+  the DOS stack, and nothing here wraps text reentrantly. }
+var
+  WrapBuf: TWrapLines;
 
 procedure InitDisplay;
 begin
@@ -53,46 +66,121 @@ begin
   Write(S);
 end;
 
-procedure WriteWrapped(X, Y, Width: Integer; const S: string);
+{ Word-wraps S to Width columns, returning the number of lines produced.
+  #13, #10 and #13#10 are hard breaks, so a blank line survives as a blank
+  line. Wrapping stops once MaxLines is reached rather than overrunning. }
+function WrapText(const S: AnsiString; Width: Integer;
+                  var Lines: TWrapLines; MaxLines: Integer): Integer;
 var
-  I, LineStart, LastSpace, Col: Integer;
-  CurrentY: Integer;
-begin
-  CurrentY := Y;
-  LineStart := 1;
-  LastSpace := 0;
-  Col := 0;
+  I, LineStart, LastSpace, Count: Integer;
+  Ch: Char;
 
-  for I := 1 to Length(S) do
+  procedure Emit(const T: string);
   begin
-    if S[I] = ' ' then
-      LastSpace := I;
-    Inc(Col);
-
-    if Col >= Width then
+    if Count < MaxLines then
     begin
-      GotoXY(X, CurrentY);
-      if LastSpace > LineStart then
-      begin
-        Write(Copy(S, LineStart, LastSpace - LineStart));
-        LineStart := LastSpace + 1;
-      end
-      else
-      begin
-        Write(Copy(S, LineStart, I - LineStart));
-        LineStart := I;
-      end;
-      Inc(CurrentY);
-      Col := I - LineStart + 1;
-      LastSpace := 0;
+      Inc(Count);
+      Lines[Count] := T;
     end;
   end;
 
-  { Write remaining text }
-  if LineStart <= Length(S) then
+begin
+  Count := 0;
+  if Width < 1 then Width := 1;
+  if MaxLines > MAX_WRAP_LINES then MaxLines := MAX_WRAP_LINES;
+  LineStart := 1;
+  LastSpace := 0;
+
+  I := 1;
+  while (I <= Length(S)) and (Count < MaxLines) do
   begin
-    GotoXY(X, CurrentY);
-    Write(Copy(S, LineStart, Length(S) - LineStart + 1));
+    Ch := S[I];
+    if (Ch = #13) or (Ch = #10) then
+    begin
+      Emit(Copy(S, LineStart, I - LineStart));
+      { CRLF is one break, not two }
+      if (Ch = #13) and (I < Length(S)) and (S[I + 1] = #10) then Inc(I);
+      LineStart := I + 1;
+      LastSpace := 0;
+    end
+    else
+    begin
+      if Ch = ' ' then LastSpace := I;
+      if (I - LineStart + 1) >= Width then
+      begin
+        if LastSpace > LineStart then
+        begin
+          { Break at the last space; the tail is rescanned from LineStart }
+          Emit(Copy(S, LineStart, LastSpace - LineStart));
+          LineStart := LastSpace + 1;
+        end
+        else
+        begin
+          { A single word longer than Width has to be split mid-word }
+          Emit(Copy(S, LineStart, I - LineStart + 1));
+          LineStart := I + 1;
+        end;
+        LastSpace := 0;
+        while (LineStart <= Length(S)) and (S[LineStart] = ' ') do Inc(LineStart);
+        I := LineStart - 1;
+      end;
+    end;
+    Inc(I);
+  end;
+
+  if (LineStart <= Length(S)) and (Count < MaxLines) then
+    Emit(Copy(S, LineStart, Length(S) - LineStart + 1));
+  Result := Count;
+end;
+
+procedure WriteWrapped(X, Y, Width: Integer; const S: string);
+var
+  I, Count: Integer;
+begin
+  Count := WrapText(S, Width, WrapBuf, MAX_WRAP_LINES);
+  for I := 1 to Count do
+    WriteAt(X, Y + I - 1, WrapBuf[I]);
+end;
+
+{ Shows Body a screenful at a time, pausing between pages. Used for anything
+  longer than a status line - story paragraphs, help, endings. }
+procedure ShowTextPage(const Heading: string; const Body: AnsiString);
+var
+  Total, Idx, Row, FirstRow, LastRow: Integer;
+begin
+  Total := WrapText(Body, SCREEN_WIDTH - 6, WrapBuf, MAX_WRAP_LINES);
+  if Total = 0 then Exit;
+
+  if Heading <> '' then FirstRow := 4 else FirstRow := 2;
+  LastRow := SCREEN_HEIGHT - 2;
+
+  Idx := 1;
+  while Idx <= Total do
+  begin
+    ClearScreen;
+    if Heading <> '' then
+    begin
+      SetColor(Yellow, Black);
+      WriteCenter(1, Heading);
+      ResetColor;
+      DrawHLine(1, SCREEN_WIDTH, 2);
+    end;
+
+    Row := FirstRow;
+    while (Row <= LastRow) and (Idx <= Total) do
+    begin
+      WriteAt(3, Row, WrapBuf[Idx]);
+      Inc(Row);
+      Inc(Idx);
+    end;
+
+    SetColor(Cyan, Black);
+    if Idx <= Total then
+      WriteCenter(SCREEN_HEIGHT, '-- More --')
+    else
+      WriteCenter(SCREEN_HEIGHT, PRESS_ANY_KEY);
+    ResetColor;
+    WaitKey;
   end;
 end;
 

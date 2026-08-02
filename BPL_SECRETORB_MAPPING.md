@@ -20,8 +20,11 @@ Defines global world properties. One per project.
 **BPL Syntax:**
 ```
 {START:WORLD}
-{REVISION:1}
+{REVISION:3}
 {TITLE:The Secret Orb}{START:R1}
+{WINROOM:9}{WINOBJ:3}
+{INTRO:1}{WINPARA:7}{LOSEPARA:8}
+{BOOKLET:0}
 {END}
 ```
 
@@ -29,9 +32,15 @@ Defines global world properties. One per project.
 
 | BPL Tag | Required | Secret Orb Field | Notes |
 |---------|----------|------------------|-------|
-| REVISION | Yes | (parser version) | Must be 1 |
+| REVISION | Yes | (parser version) | Current is 3; 1 and 2 still load |
 | TITLE | Yes | TGameWorld.Title | Max 40 chars |
 | START | Yes | TGameWorld.CurrentRoom | VAR reference (R1, R2, etc.) |
+| WINROOM | No | TGameWorld.WinRoomID | 0 = no ending |
+| WINOBJ | No | TGameWorld.WinObjectID | 0 = reaching WINROOM is enough |
+| INTRO | No | TGameWorld.IntroPara | Paragraph shown before the first room |
+| WINPARA | No | TGameWorld.WinPara | Paragraph shown on winning |
+| LOSEPARA | No | TGameWorld.LosePara | Paragraph shown on quitting unwon |
+| BOOKLET | No | TGameWorld.WorldFlags bit 0 | 1 = cite paragraph numbers, do not print |
 
 ---
 
@@ -63,6 +72,8 @@ Defines a traversable location.
 | WEST | Yes | TRoom.Exits[dirWest] | VAR ref or 0 |
 | UP | Yes | TRoom.Exits[dirUp] | VAR ref or 0 |
 | DOWN | Yes | TRoom.Exits[dirDown] | VAR ref or 0 |
+| POINTS | No | TRoom.Points | Scored on first visit |
+| FIRSTVISIT | No | TRoom.FirstVisitPara | Paragraph played on first visit |
 
 **Notes:**
 - Exit values are VAR references (e.g., `R2`) or `0` for no exit
@@ -99,6 +110,8 @@ Defines an interactive item (mapped from BPL's ITEM type).
 | CARRIEDBY | No | TGameObject.CarriedBy | MOB VAR ref or 0 |
 | FLAGS | No | TGameObject.Flags | Comma-separated |
 | USETEXT | No | TGameObject.UseText | Max 100 chars |
+| POINTS | No | TGameObject.Points | Scored on first take |
+| FIRSTTAKE | No | TGameObject.FirstTakePara | Paragraph played on first take |
 
 **Flag Values:**
 - `pickup` - Player can take this object (ofPickup)
@@ -136,10 +149,45 @@ Defines an NPC (mapped from BPL's CREATURE type).
 | DESC | Yes | TMob.Desc | Max 100 chars |
 | ROOM | Yes | TMob.RoomID | VAR reference |
 | DIALOGUE | No | TMob.Dialogue | Max 200 chars |
+| FIRSTTALK | No | TMob.FirstTalkPara | Paragraph played on first talk |
 
 **Notes:**
 - BPL CREATURE stats (RACE, AGE, FACTIONS, STR, DEX, INT, etc.) are not mapped
 - DIALOGUE replaces BPL's DIALOG set (single string, not pool)
+
+---
+
+### PARAGRAPH (revision 3)
+
+A numbered block of story text. The game plays it at a trigger — the intro, an
+ending, or the first visit / take / talk on an entity — and the editors can export
+the whole set as a printable booklet.
+
+**BPL Syntax:**
+```
+{START:PARAGRAPH}
+{REVISION:3}
+{OC:1}
+{TEXT:Three ages ago the orb was carried out of the Sanctum and lost.\n\nYou have come to put it back.}
+{END}
+```
+
+**Maps to:** `TGameWorld.Paragraphs[OC]`
+
+| BPL Tag | Required | Secret Orb Field | Notes |
+|---------|----------|------------------|-------|
+| OC | Yes | (paragraph number) | 1..128; this is the booklet number |
+| TEXT | Yes | TGameWorld.Paragraphs[OC] | Max 1600 chars after decoding |
+
+**Notes:**
+- **No VAR.** Paragraphs are referenced by plain number everywhere, because that
+  number gets printed in the booklet and must be what the author wrote. This also
+  sidesteps the unimplemented VAR-resolution pass.
+- A tag value is one line and cannot contain braces, so `TEXT` is escaped:
+  `\n` for a line break, `\\` for a literal backslash, and `{` `}` become `(` `)`.
+  See `EncodeParaText` / `DecodeParaText` in `bplpars.pas`.
+- Deleting a paragraph leaves its number unused rather than renumbering the rest,
+  so a booklet already in a player's hands keeps matching.
 
 ---
 
@@ -272,7 +320,7 @@ The editor can also serialize back to BPL for round-trip editing.
 
 ## Future Extensions
 
-These BPL features are documented but not implemented in v1:
+These BPL features are documented but not implemented yet:
 
 1. **Events** - `{START:EVENT}` with triggers and actions
 2. **Flags/Counters** - Game state variables
@@ -280,6 +328,9 @@ These BPL features are documented but not implemented in v1:
 4. **Object States** - Dynamic object descriptions
 5. **Containers** - Objects holding other objects
 6. **Runtime Values** - Range, Set, Dice resolution
+
+When events arrive, `atShowMessage` is expected to carry a PARAGRAPH number rather
+than inline text, so the booklet stays the single source of long-form prose.
 
 Each extension will increment the REVISION number when implemented.
 
