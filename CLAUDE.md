@@ -297,6 +297,13 @@ The project must fit on a 720KB (737,280 bytes) floppy disk. CI checks verify th
 - Use size-optimized compiler flags (`-XX`, `-CX`, `-Xs`)
 - Minimize world file content in default distribution
 
+## Known Issues
+
+`TODO.md` at the repo root lists known defects found during earlier work and
+deliberately left unfixed, with the cost and the fix for each. Check it before
+assuming a surprising behaviour is new — notably, **`make converter` does not
+compile** despite being documented below.
+
 ## Development Workflow
 
 When modifying game logic:
