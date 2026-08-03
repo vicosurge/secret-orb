@@ -23,6 +23,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y fpc
 
+      # secorb.pas is the DOS 8.3 duplicate driven by BUILD.BAT. If it drifts
+      # from secretorb.pas the FreeDOS build silently diverges.
+      - name: Check DOS 8.3 duplicate is in step
+        working-directory: pascal
+        run: diff secretorb.pas secorb.pas
+
       - name: Build Linux binaries
         working-directory: pascal
         run: |
@@ -31,6 +37,28 @@ jobs:
           fpc -O2 -XX -CX -Xs -Fusrc -obin/editor editor.pas
           echo "Building Turbo Vision editor (verification only)..."
           fpc -O2 -XX -CX -Xs -Fusrc -obin/editor-tv editor-tv.pas
+          echo "Building the development tools (verification only)..."
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/converter tools/converter.pas
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/validate tools/validate.pas
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/bpldump tools/bpldump.pas
+
+      - name: Run unit tests
+        working-directory: pascal
+        run: |
+          fpc -O2 -XX -CX -Xs -Fusrc -obin/pairtest tools/pairtest.pas
+          bin/pairtest
+
+      # Saving the same world twice must produce the same bytes, or world files
+      # diff noisily and cannot be checksummed.
+      - name: Check world files are byte-reproducible
+        working-directory: pascal
+        run: |
+          bin/converter data/world.dat /tmp/a.dat
+          bin/converter data/world.dat /tmp/b.dat
+          cmp /tmp/a.dat /tmp/b.dat
+          bin/converter /tmp/a.dat /tmp/c.dat
+          bin/converter /tmp/c.dat /tmp/d.dat
+          cmp /tmp/c.dat /tmp/d.dat
 
       - name: Package Linux build
         working-directory: pascal

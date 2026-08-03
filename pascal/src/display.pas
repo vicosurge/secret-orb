@@ -22,6 +22,8 @@ procedure ClearScreen;
 procedure WriteAt(X, Y: Integer; const S: string);
 procedure WriteCenter(Y: Integer; const S: string);
 procedure WriteWrapped(X, Y, Width: Integer; const S: string);
+function WriteWrappedMax(X, Y, Width, MaxLines: Integer;
+                         const S: AnsiString): Integer;
 function WrapText(const S: AnsiString; Width: Integer;
                   var Lines: TWrapLines; MaxLines: Integer): Integer;
 procedure ShowTextPage(const Heading: string; const Body: AnsiString);
@@ -133,13 +135,21 @@ begin
   Result := Count;
 end;
 
-procedure WriteWrapped(X, Y, Width: Integer; const S: string);
+{ Like WriteWrapped, but stops after MaxLines rows and reports how many it
+  used, so a caller laying out a screen knows where the text ended. }
+function WriteWrappedMax(X, Y, Width, MaxLines: Integer;
+                         const S: AnsiString): Integer;
 var
-  I, Count: Integer;
+  I: Integer;
 begin
-  Count := WrapText(S, Width, WrapBuf, MAX_WRAP_LINES);
-  for I := 1 to Count do
+  Result := WrapText(S, Width, WrapBuf, MaxLines);
+  for I := 1 to Result do
     WriteAt(X, Y + I - 1, WrapBuf[I]);
+end;
+
+procedure WriteWrapped(X, Y, Width: Integer; const S: string);
+begin
+  WriteWrappedMax(X, Y, Width, MAX_WRAP_LINES, S);
 end;
 
 { Shows Body a screenful at a time, pausing between pages. Used for anything

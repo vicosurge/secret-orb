@@ -26,7 +26,9 @@ type
     cmdInventory,
     cmdSave,
     cmdLoad,
-    cmdScore
+    cmdScore,
+    cmdExits,
+    cmdAgain
   );
 
   TGameState = (gsPlaying, gsQuit, gsWon);
@@ -38,6 +40,10 @@ type
     LastNoun: string[40];
     PromptY: Integer;       { Set by ShowRoom so input lands on the drawn prompt }
     SaveFile: string;
+    { What AGAIN repeats. Only turn-consuming commands are recorded, so AGAIN
+      never repeats itself and never replays a save or a help screen. }
+    PrevCmd: TCommandType;
+    PrevNoun: string[40];
   end;
 
 procedure InitGame(var G: TGame);
@@ -57,6 +63,7 @@ procedure HandleTalk(var G: TGame; const Noun: string);
 procedure HandleInventory(var G: TGame);
 procedure HandleSave(var G: TGame; const Noun: string);
 procedure HandleLoad(var G: TGame; const Noun: string);
+procedure HandleExits(var G: TGame);
 procedure HandleScore(var G: TGame);
 
 const
@@ -72,6 +79,8 @@ begin
   G.LastNoun := '';
   G.PromptY := 14;
   G.SaveFile := DEFAULT_SAVE;
+  G.PrevCmd := cmdNone;
+  G.PrevNoun := '';
 end;
 
 function LoadGame(var G: TGame; const FileName: string): Boolean;
@@ -104,6 +113,20 @@ begin
   end
   else
     ShowTextPage(G.World.Title, Body);
+end;
+
+{ Declared before its first use. It used to sit below ParseCommand, which meant
+  the calls in there bound SysUtils.Trim while every later call in the unit
+  bound this one - a change here would have applied to only some call sites. }
+function Trim(const S: string): string;
+var
+  I, J: Integer;
+begin
+  I := 1;
+  J := Length(S);
+  while (I <= J) and (S[I] <= ' ') do Inc(I);
+  while (J >= I) and (S[J] <= ' ') do Dec(J);
+  Result := Copy(S, I, J - I + 1);
 end;
 
 function ParseCommand(const Input: string; var Noun: string): TCommandType;
@@ -172,21 +195,14 @@ begin
     Result := cmdLoad
   else if Cmd = 'SCORE' then
     Result := cmdScore
+  else if Cmd = 'EXITS' then
+    Result := cmdExits
+  else if (Cmd = 'G') or (Cmd = 'AGAIN') then
+    Result := cmdAgain
   else if Cmd = '' then
     Result := cmdNone
   else
     Result := cmdUnknown;
-end;
-
-function Trim(const S: string): string;
-var
-  I, J: Integer;
-begin
-  I := 1;
-  J := Length(S);
-  while (I <= J) and (S[I] <= ' ') do Inc(I);
-  while (J >= I) and (S[J] <= ' ') do Dec(J);
-  Result := Copy(S, I, J - I + 1);
 end;
 
 procedure MovePlayer(var G: TGame; Dir: TDirection);
@@ -241,6 +257,28 @@ begin
   G.State := gsWon;
 end;
 
+{ The one place exits are turned into prose - ShowRoom draws it every turn and
+  the EXITS command reports the same string. }
+function ExitsLine(var G: TGame): string;
+var
+  Idx: Integer;
+  D: TDirection;
+begin
+  Result := 'Exits:';
+  Idx := FindRoomByID(G.World, G.World.CurrentRoom);
+  if Idx > 0 then
+    for D := Low(TDirection) to High(TDirection) do
+      if G.World.Rooms[Idx].Exits[D] <> DIR_NONE then
+        Result := Result + ' ' + GetExitName(D);
+  if Result = 'Exits:' then
+    Result := 'Exits: None';
+end;
+
+procedure HandleExits(var G: TGame);
+begin
+  G.LastMessage := ExitsLine(G);
+end;
+
 procedure HandleScore(var G: TGame);
 begin
   G.LastMessage := 'Score: ' + IntToStr(G.World.Score);
@@ -271,6 +309,19 @@ end;
 
 procedure ExecuteCommand(var G: TGame; Cmd: TCommandType);
 begin
+  { AGAIN is resolved before dispatch, so the replayed command behaves in every
+    respect - including the turn count - as if the player had retyped it. }
+  if Cmd = cmdAgain then
+  begin
+    if G.PrevCmd = cmdNone then
+    begin
+      G.LastMessage := 'There is nothing to repeat.';
+      Exit;
+    end;
+    Cmd := G.PrevCmd;
+    G.LastNoun := G.PrevNoun;
+  end;
+
   case Cmd of
     cmdNorth: MovePlayer(G, dirNorth);
     cmdSouth: MovePlayer(G, dirSouth);
@@ -292,16 +343,24 @@ begin
     cmdSave: HandleSave(G, G.LastNoun);
     cmdLoad: HandleLoad(G, G.LastNoun);
     cmdScore: HandleScore(G);
+    cmdExits: HandleExits(G);
     cmdUnknown: G.LastMessage := 'I don''t understand that command.';
     cmdNone: ; { Do nothing }
   end;
 
   { Only commands that act on the world consume a turn - asking for the score or
-    saving the game should not inflate the turn count }
+    saving the game should not inflate the turn count. The same set is what
+    AGAIN will repeat, which is why cmdAgain cannot end up recorded here: by
+    this point it has already been rewritten to the command it stood for. }
   case Cmd of
-    cmdNone, cmdUnknown, cmdHelp, cmdScore, cmdSave, cmdLoad, cmdQuit: ;
+    cmdNone, cmdUnknown, cmdHelp, cmdScore, cmdSave, cmdLoad, cmdQuit,
+    cmdExits: ;
   else
-    Inc(G.World.Turns);
+    begin
+      Inc(G.World.Turns);
+      G.PrevCmd := Cmd;
+      G.PrevNoun := G.LastNoun;
+    end;
   end;
 
   if G.State = gsPlaying then
@@ -313,8 +372,7 @@ var
   Idx, I: Integer;
   Room: TRoom;
   Exits, ObjList, MobList: string;
-  D: TDirection;
-  CurrentY: Integer;
+  CurrentY, Avail, Lines: Integer;
 begin
   ClearScreen;
 
@@ -381,26 +439,26 @@ begin
   Inc(CurrentY);
 
   { Exits }
-  Exits := 'Exits:';
-  for D := Low(TDirection) to High(TDirection) do
-    if Room.Exits[D] <> DIR_NONE then
-      Exits := Exits + ' ' + GetExitName(D);
-
-  if Exits = 'Exits:' then
-    Exits := 'Exits: None';
+  Exits := ExitsLine(G);
 
   SetColor(Cyan, Black);
   WriteAt(1, CurrentY, Exits);
   ResetColor;
   Inc(CurrentY, 2);
 
-  { Last message }
+  { Last message. Wrapped rather than written as one line: an examine puts a
+    whole object description here, and letting the terminal do the wrapping
+    pushed the prompt off the row recorded in PromptY. Bounded so that the
+    blank line and the prompt below always still fit on the screen. }
   if G.LastMessage <> '' then
   begin
+    Avail := SCREEN_HEIGHT - 1 - CurrentY;
+    if Avail < 1 then Avail := 1;
     SetColor(LightGreen, Black);
-    WriteAt(1, CurrentY, G.LastMessage);
+    Lines := WriteWrappedMax(1, CurrentY, SCREEN_WIDTH - 2, Avail,
+                             G.LastMessage);
     ResetColor;
-    Inc(CurrentY, 2);
+    Inc(CurrentY, Lines + 1);
   end;
 
   { Command prompt - remember where it landed so RunGame reads input there }
@@ -438,14 +496,16 @@ begin
 
   WriteAt(43, 4, 'Other:');
   WriteAt(45, 5, 'L, LOOK   - Look around');
-  WriteAt(45, 6, 'H, HELP   - Show this help');
-  WriteAt(45, 7, 'Q, QUIT   - Quit the game');
+  WriteAt(45, 6, 'EXITS     - List the ways out');
+  WriteAt(45, 7, 'G, AGAIN  - Repeat last command');
+  WriteAt(45, 8, 'H, HELP   - Show this help');
+  WriteAt(45, 9, 'Q, QUIT   - Quit the game');
 
-  WriteAt(43, 9, 'Progress:');
-  WriteAt(45, 10, 'SCORE     - Show score and turns');
-  WriteAt(45, 11, 'SAVE [file]    - Save your game');
-  WriteAt(45, 12, 'LOAD [file]    - Restore a game');
-  WriteAt(45, 14, 'Default save file: ' + DEFAULT_SAVE);
+  WriteAt(43, 11, 'Progress:');
+  WriteAt(45, 12, 'SCORE     - Show score and turns');
+  WriteAt(45, 13, 'SAVE [file]    - Save your game');
+  WriteAt(45, 14, 'LOAD [file]    - Restore a game');
+  WriteAt(45, 16, 'Default save file: ' + DEFAULT_SAVE);
 
   SetColor(Cyan, Black);
   WriteCenter(24, PRESS_ANY_KEY);

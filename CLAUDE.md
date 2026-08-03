@@ -73,15 +73,44 @@ The codebase is organized into modular units in `pascal/src/`:
 - **display.pas**: Text display abstraction layer
   - Wraps CRT unit for cross-platform terminal operations
   - Functions: `ClearScreen`, `WriteAt`, `WriteCenter`, `WriteWrapped`, `ReadLine`
+  - `WriteWrappedMax` is the bounded form: it stops after N rows and returns how
+    many it used, so a caller laying out a screen knows where the text ended.
+    `WriteWrapped` is a thin call to it
   - Drawing primitives: `DrawBox`, `DrawHLine`
   - 80x25 character screen assumed
+
+- **worldval.pas**: Editor-side world checks — **never used by the game**
+  - `ValidateWorld` reports broken exits, unreachable rooms, missing entity
+    references, win conditions that cannot be met, one-way exits, and paragraph
+    numbers naming empty slots. The rules mirror `validate()` in
+    `web/editor.html`, so all three editors agree about what is wrong with a
+    world; the two implementations are checked against each other by feeding
+    the same broken world to both
+  - `PairExits` counts, and optionally fills, the exits whose opposite side is
+    free. It never overwrites a return exit that already leads somewhere else —
+    that is either a deliberate one-way link or a mistake the validator reports.
+    Both Pascal editors and the browser editor's *Link back* button behave the
+    same way
+  - `WriteParaXRef` writes the author's cross-reference (see below)
+  - `secretorb.pas` must not list this unit in `uses`. The game runs from a
+    720KB floppy and has no business carrying authoring checks
 
 - **gamecore.pas**: Game engine and command processing
   - Command parser: converts player input to `TCommandType` enum. Only the verb is
     upper-cased; the noun keeps its typed case so `SAVE`/`LOAD` file names survive
     on case-sensitive filesystems
   - Command handlers: movement, examine, take, drop, use, open, read, talk,
-    inventory, save, load, score
+    inventory, save, load, score, exits, again
+  - `EXITS` reports the way out through `LastMessage`; `ExitsLine` is the single
+    place exits are turned into prose, called by both it and `ShowRoom`
+  - `AGAIN`/`G` replays `TGame.PrevCmd`. Only turn-consuming commands are
+    recorded there, so `AGAIN` can never repeat itself, a save, or a help
+    screen. It is resolved before dispatch, so the replayed command behaves in
+    every respect — turn count included — as if the player had retyped it
+  - `LastMessage` is wrapped through `WriteWrappedMax` and bounded to the rows
+    left above the prompt. Writing it unwrapped let the terminal wrap it, which
+    pushed the prompt off the row `PromptY` recorded and drew `>` on top of the
+    message
   - Game loop: `RunGame` function drives the main gameplay
   - `ShowRoom` records the row it drew the `>` prompt on in `TGame.PromptY`, which
     `RunGame` uses to position input
@@ -276,6 +305,23 @@ bin/converter input.txt output.dat
 
 The game auto-detects format on load (checks for 'SORB' magic signature).
 
+Saving is byte-reproducible: every packed record is `FillChar`-zeroed before it
+is populated, so the padding after a short string is zero rather than whatever
+was in memory. Converting the same world twice yields identical files, which is
+what makes world files diffable and checksummable. **Never `FillChar`
+`TGameWorld` itself** — it holds refcounted `AnsiString` paragraph fields.
+
+## Development Tools
+
+Not part of any release; `make tools` and `make test` build them.
+
+| Tool | What it does |
+|------|--------------|
+| `tools/converter.pas` | Text/BPL world → binary |
+| `tools/validate.pas` | Runs `ValidateWorld` from the shell; exits non-zero on errors |
+| `tools/bpldump.pas` | Parses a BPL file and prints resolved exits and parse errors — the only way to see VAR resolution without an editor |
+| `tools/pairtest.pas` | Unit tests for `PairExits`; run by `make test` and by CI |
+
 ## Compiler Flags
 
 Free Pascal compiler flags (see Makefile):
@@ -301,8 +347,9 @@ The project must fit on a 720KB (737,280 bytes) floppy disk. CI checks verify th
 
 `TODO.md` at the repo root lists known defects found during earlier work and
 deliberately left unfixed, with the cost and the fix for each. Check it before
-assuming a surprising behaviour is new — notably, **`make converter` does not
-compile** despite being documented below.
+assuming a surprising behaviour is new — notably, **the shipped demo world
+cannot be completed**: it has no win room, and Shadow Room is unreachable.
+`bin/validate data/world.dat` reports both.
 
 ## Development Workflow
 
@@ -357,6 +404,24 @@ The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provid
 The lightweight `editor.pas` edits a paragraph as a `MAX_PARA_LINES` × 74 grid of
 `ReadLine` calls joined with `#13#10`, because it has no multi-line control. All
 three editors can write a booklet whose numbering matches what the game cites.
+
+### Validation, auto-connect and the cross-reference
+
+All three editors share three authoring features, backed by `worldval.pas` on
+the Pascal side and by equivalent functions in `web/editor.html`:
+
+| Feature | `editor.pas` | `editor-tv.pas` | `web/editor.html` |
+|---------|--------------|-----------------|-------------------|
+| Validate world | `V` on the main menu | World ▸ Validate | Check tab |
+| Auto-connect exits | prompt on F2-save of a room | prompt on room OK | *Link back* button |
+| Paragraph cross-reference | `R` in the paragraph list | Story ▸ Export cross-reference | *Cross-ref* button |
+
+The cross-reference is **a separate file from the booklet, deliberately**. The
+booklet is what the player is handed; a list of what fires each paragraph would
+give the game away. It names every trigger that reaches a paragraph, flags
+paragraphs nothing fires, and flags triggers naming an empty slot — the last of
+which is invisible at run time, because `ShowParagraph` exits silently on an
+empty body.
 
 ---
 

@@ -329,6 +329,7 @@
           <span>
             <button id="addPara">+ Add</button>
             <button id="exportBooklet">Booklet</button>
+            <button id="exportXRef" title="Author's list of what fires each paragraph">Cross-ref</button>
           </span>
         </header>
         <ul id="listParas"></ul>
@@ -1076,6 +1077,25 @@ function validate() {
     else if (!wo.flags.pickup) err("Win object “" + (wo.name || "unnamed") + "” cannot be picked up, so the win condition is unreachable.", "object " + wo.id);
   }
 
+  // Paragraph references. A number that names an empty slot fires nothing at
+  // all at run time - showParagraph and the engine's ShowParagraph both exit
+  // silently on an empty body - so this is the one authoring mistake with no
+  // symptom whatsoever in the game. Mirrored by CheckPara in worldval.pas.
+  const paraRef = (n, what, where) => {
+    n = n | 0;
+    if (!n) return;
+    if (n > LIM.PARAGRAPHS)
+      err(what + " is paragraph " + n + ", above the limit of " + LIM.PARAGRAPHS + ".", where);
+    else if (!(world.paragraphs[n] || "").trim())
+      err(what + " names paragraph " + n + ", which is empty.", where);
+  };
+  paraRef(world.introPara, "Intro", "world");
+  paraRef(world.winPara, "Win text", "world");
+  paraRef(world.losePara, "Lose text", "world");
+  for (const r of world.rooms) paraRef(r.firstVisitPara, "First visit", "room " + r.id);
+  for (const o of world.objects) paraRef(o.firstTakePara, "First take", "object " + o.id);
+  for (const m of world.mobs) paraRef(m.firstTalkPara, "First talk", "mob " + m.id);
+
   // Reachability from the start room
   const start = roomById(world.startRoom);
   if (start && world.rooms.length > 1) {
@@ -1741,13 +1761,25 @@ function renderForm(kind) {
         renderWorldBar(); renderListRowsOnly(kind);
       });
     $("f-linkback").addEventListener("click", () => {
-      let n = 0;
+      // Only a free opposite exit is filled. One that already leads somewhere
+      // else is left alone: that is either a deliberate one-way link or a
+      // mistake the Check tab reports, and neither should be overwritten
+      // silently. Mirrors PairExits in pascal/src/worldval.pas.
+      let added = 0, kept = 0;
       for (const d of DIRS) {
-        const t = e.exits[d] | 0;
-        const other = roomById(t);
-        if (other && (other.exits[OPPOSITE[d]] | 0) !== e.id) { other.exits[OPPOSITE[d]] = e.id; n++; }
+        const other = roomById(e.exits[d] | 0);
+        if (!other || other.id === e.id) continue;
+        const back = other.exits[OPPOSITE[d]] | 0;
+        if (back === e.id) continue;
+        if (back) { kept++; continue; }
+        other.exits[OPPOSITE[d]] = e.id;
+        added++;
       }
-      toast(n ? "Added " + n + " return exit" + (n === 1 ? "" : "s") + "." : "Every exit already leads back.");
+      let msg = added
+        ? "Added " + added + " return exit" + (added === 1 ? "" : "s") + "."
+        : "No return exits to add.";
+      if (kept) msg += " Left " + kept + " one-way link" + (kept === 1 ? "" : "s") + " alone.";
+      toast(msg);
       renderAll();
     });
   }
@@ -1926,6 +1958,89 @@ function buildBooklet() {
     parts.join("") + "</body></html>";
 }
 
+// Every trigger that fires paragraph n. Mirrors DescribeTriggers in
+// pascal/src/worldval.pas, so all three editors report the same thing.
+function paraTriggers(n) {
+  const out = [];
+  if ((world.introPara | 0) === n) out.push("the world intro");
+  if ((world.winPara | 0) === n) out.push("winning");
+  if ((world.losePara | 0) === n) out.push("ending without a win");
+  for (const r of world.rooms)
+    if ((r.firstVisitPara | 0) === n)
+      out.push('first visit to room ' + r.id + ' "' + (r.name || "unnamed") + '"');
+  for (const o of world.objects)
+    if ((o.firstTakePara | 0) === n)
+      out.push('first take of object ' + o.id + ' "' + (o.name || "unnamed") + '"');
+  for (const m of world.mobs)
+    if ((m.firstTalkPara | 0) === n)
+      out.push('first talk with mob ' + m.id + ' "' + (m.name || "unnamed") + '"');
+  return out;
+}
+
+// Triggers pointing at a slot with no text. These fire nothing and say nothing
+// at run time, so this listing is where an author finds them.
+function danglingParaRefs() {
+  const out = [];
+  const check = (n, what) => {
+    n = n | 0;
+    if (n && !(world.paragraphs[n] || "").trim())
+      out.push(what + " names paragraph " + n + ", which is empty.");
+  };
+  check(world.introPara, "The world intro");
+  check(world.winPara, "The win text");
+  check(world.losePara, "The lose text");
+  for (const r of world.rooms) check(r.firstVisitPara, "Room " + r.id + " first visit");
+  for (const o of world.objects) check(o.firstTakePara, "Object " + o.id + " first take");
+  for (const m of world.mobs) check(m.firstTalkPara, "Mob " + m.id + " first talk");
+  return out;
+}
+
+// The author's companion to the booklet. A separate file on purpose: the
+// booklet is what the player is handed, and this would give the game away.
+function buildXRef() {
+  const esc = escapeHtml;
+  const nums = paraNumbers();
+  let orphans = 0;
+
+  const rows = nums.map(n => {
+    const trig = paraTriggers(n);
+    if (!trig.length) orphans++;
+    const preview = (world.paragraphs[n] || "").split(/\r?\n/)[0].slice(0, 70);
+    return '<section><h2>' + n + "</h2><p class=\"pv\">" + esc(preview) + "…</p>" +
+      (trig.length
+        ? "<ul>" + trig.map(t => "<li>" + esc(t) + "</li>").join("") + "</ul>"
+        : '<p class="bad">Nothing fires this paragraph.</p>') +
+      "</section>";
+  });
+
+  const dangling = danglingParaRefs();
+
+  return "<!doctype html><html><head><meta charset=\"utf-8\">" +
+    "<title>" + esc(world.title) + " — Cross-reference</title><style>" +
+    "body{font:12pt/1.5 Georgia,serif;max-width:44em;margin:2em auto;padding:0 1em}" +
+    "h1{font-size:1.6em;margin-bottom:0}" +
+    ".sub{color:#555;margin-top:.3em}" +
+    "section{break-inside:avoid;margin:1.2em 0;border-top:1px solid #ccc;padding-top:.5em}" +
+    "h2{font-size:1em;letter-spacing:.1em;color:#666;margin:0 0 .3em}" +
+    ".pv{color:#333;font-style:italic;margin:0 0 .4em}" +
+    "ul{margin:0;padding-left:1.4em}" +
+    ".bad{color:#a00;margin:0}" +
+    "@media print{body{margin:0}}" +
+    "</style></head><body>" +
+    "<h1>" + esc(world.title) + " — cross-reference</h1>" +
+    '<p class="sub">For the author, not the player: what fires each paragraph. ' +
+    "The numbers match the ones the game cites and the booklet prints.</p>" +
+    rows.join("") +
+    "<section><h2>Triggers naming an empty paragraph</h2>" +
+    (dangling.length
+      ? '<ul class="bad">' + dangling.map(d => "<li>" + esc(d) + "</li>").join("") + "</ul>"
+      : "<p>None.</p>") +
+    "</section>" +
+    "<p class=\"sub\">" + nums.length + " paragraph(s), " + orphans +
+    " never fired, " + dangling.length + " trigger(s) naming an empty slot.</p>" +
+    "</body></html>";
+}
+
 // Redraw list labels without rebuilding the form (which would steal focus while typing)
 function renderListRowsOnly(kind) {
   const ul = $("list" + kind[0].toUpperCase() + kind.slice(1));
@@ -2008,6 +2123,11 @@ $("exportBooklet").addEventListener("click", () => {
   if (!paraNumbers().length) return toast("There are no paragraphs to print yet.", true);
   download("booklet.html", buildBooklet(), "text/html");
   toast("Booklet exported. Open it and print to PDF.");
+});
+$("exportXRef").addEventListener("click", () => {
+  if (!paraNumbers().length) return toast("There are no paragraphs to cross-reference yet.", true);
+  download("xref.html", buildXRef(), "text/html");
+  toast("Cross-reference exported. This one is for you, not the player.");
 });
 
 $("addRoom").addEventListener("click", () => {

@@ -18,7 +18,8 @@ DOS_FLAGS = -Twin16 -WD
 DOS32_FLAGS = -Tgo32v2
 WIN32_FLAGS = -Twin32
 
-.PHONY: all clean native dos dos32 win32 release editors editor-tv
+.PHONY: all clean native dos dos32 win32 release editors editor-tv \
+        converter tools test sizecheck
 
 all: native
 
@@ -34,6 +35,18 @@ native: $(BINDIR)
 # Converter tool
 converter: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/converter tools/converter.pas
+
+# Development tools. None of these ship: worldval.pas is editor-side only and
+# must never be linked into the game.
+tools: $(BINDIR)
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/converter tools/converter.pas
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/validate tools/validate.pas
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/bpldump tools/bpldump.pas
+
+# Unit tests
+test: $(BINDIR)
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/pairtest tools/pairtest.pas
+	$(BINDIR)/pairtest
 
 # Turbo Vision editor (for game creators, not part of player distribution)
 editor-tv: $(BINDIR)

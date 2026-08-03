@@ -662,6 +662,13 @@ begin
   {$I+}
   if IOResult <> 0 then Exit;
 
+  { Every packed record is zeroed before it is populated. A Pascal short string
+    only assigns its used prefix, so without this the padding after each string
+    carries whatever was in the record beforehand and BlockWrite puts that on
+    disk - saving the same world twice would produce different bytes.
+    Never do this to TGameWorld itself: it holds refcounted AnsiStrings. }
+  FillChar(Header, SizeOf(Header), 0);
+
   { Prepare header }
   Header.Magic := SORB_MAGIC;
   Header.Version := FILE_VERSION;
@@ -694,6 +701,7 @@ begin
   begin
     if W.Rooms[I].Active then
     begin
+      FillChar(RoomBin, SizeOf(RoomBin), 0);
       RoomBin.V2.ID := W.Rooms[I].ID;
       RoomBin.V2.Name := W.Rooms[I].Name;
       RoomBin.V2.Desc := W.Rooms[I].Desc;
@@ -724,6 +732,7 @@ begin
   begin
     if W.Objects[I].Active then
     begin
+      FillChar(ObjBin, SizeOf(ObjBin), 0);
       ObjBin.V2.ID := W.Objects[I].ID;
       ObjBin.V2.Name := W.Objects[I].Name;
       ObjBin.V2.Desc := W.Objects[I].Desc;
@@ -752,13 +761,13 @@ begin
   begin
     if W.Mobs[I].Active then
     begin
+      FillChar(MobBin, SizeOf(MobBin), 0);
       MobBin.V2.ID := W.Mobs[I].ID;
       MobBin.V2.Name := W.Mobs[I].Name;
       MobBin.V2.Desc := W.Mobs[I].Desc;
       MobBin.V2.RoomID := W.Mobs[I].RoomID;
       MobBin.V2.Dialogue := W.Mobs[I].Dialogue;
       MobBin.V2.Active := True;
-      FillChar(MobBin.V2.Reserved, SizeOf(MobBin.V2.Reserved), 0);
       MobBin.FirstTalkPara := W.Mobs[I].FirstTalkPara;
 
       {$I-}
@@ -1249,6 +1258,11 @@ begin
   {$I+}
   if IOResult <> 0 then Exit;
 
+  { Zeroed whole rather than just Reserved, so the record stays free of
+    uninitialised padding if a field is ever added. The two state records
+    below are packed numerics with every field assigned - they have none. }
+  FillChar(Header, SizeOf(Header), 0);
+
   Header.Magic := SORS_MAGIC;
   Header.Version := SAVE_VERSION;
   Header.WorldSig := WorldSignature(W);
@@ -1256,7 +1270,6 @@ begin
   Header.Score := W.Score;
   Header.Turns := W.Turns;
   Header.InvCount := W.PlayerInvCount;
-  FillChar(Header.Reserved, SizeOf(Header.Reserved), 0);
 
   {$I-}
   BlockWrite(F, Header, SizeOf(TSaveHeader), BytesWritten);

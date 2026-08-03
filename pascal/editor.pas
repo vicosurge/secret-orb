@@ -6,7 +6,7 @@ program Editor;
 
 uses
   Crt, SysUtils,
-  GameData, DataFile, Display;
+  GameData, DataFile, Display, WorldVal;
 
 const
   VERSION = '0.1.0';
@@ -22,6 +22,9 @@ type
 
 var
   World: TGameWorld;
+  { Held here rather than on the stack - a TIssueList is about 15KB, which is
+    more than a DOS stack wants to carry. }
+  Issues: TIssueList;
   EditorState: TEditorState;
   CurrentFile: string;
   Modified: Boolean;
@@ -77,6 +80,8 @@ begin
   Inc(Y, 2);
   WriteAt(30, Y, 'P. Story Paragraphs');
   Inc(Y, 2);
+  WriteAt(30, Y, 'V. Validate World');
+  Inc(Y, 2);
   WriteAt(30, Y, '7. World Settings');
   Inc(Y, 1);
   WriteAt(30, Y, '8. Load World');
@@ -90,6 +95,78 @@ begin
   SetColor(Cyan, Black);
   WriteAt(1, 24, 'Choice: ');
   ResetColor;
+end;
+
+{ Runs the same checks as editor-tv and the browser editor, and pages the
+  results. Errors are things the engine will get wrong; warnings are things an
+  author usually meant to do differently. }
+procedure ValidateForm;
+var
+  Count, Errors, First, I, Y: Integer;
+  Ch: Char;
+begin
+  Count := ValidateWorld(World, Issues);
+
+  Errors := 0;
+  for I := 1 to Count do
+    if Issues[I].Level = ilError then Inc(Errors);
+
+  First := 1;
+  repeat
+    ClearScreen;
+    DrawHeader;
+
+    SetColor(Yellow, Black);
+    WriteCenter(4, '=== WORLD CHECK ===');
+    ResetColor;
+
+    if Count = 0 then
+    begin
+      SetColor(LightGreen, Black);
+      WriteCenter(12, 'No problems found.');
+      ResetColor;
+    end
+    else
+    begin
+      Y := 6;
+      I := First;
+      while (I <= Count) and (Y < 22) do
+      begin
+        if Issues[I].Level = ilError then
+          SetColor(LightRed, Black)
+        else
+          SetColor(Yellow, Black);
+        WriteAt(1, Y, IssueLevelName(Issues[I].Level));
+        ResetColor;
+        WriteAt(7, Y, Copy('[' + Issues[I].Where + '] ' + Issues[I].Text,
+                           1, 72));
+        Inc(Y);
+        Inc(I);
+      end;
+    end;
+
+    SetColor(Cyan, Black);
+    WriteAt(1, 23, IntToStr(Errors) + ' error(s), ' +
+                   IntToStr(Count - Errors) + ' warning(s).' +
+                   '  PgUp/PgDn: Scroll  Esc: Back');
+    ResetColor;
+
+    Ch := ReadKey;
+    if Ch = #0 then
+    begin
+      Ch := ReadKey;
+      case Ch of
+        #73: { PgUp }
+          begin
+            Dec(First, 16);
+            if First < 1 then First := 1;
+          end;
+        #81: { PgDn }
+          if First + 16 <= Count then Inc(First, 16);
+      end;
+      Ch := #1;   { Not Esc - keep the screen up }
+    end;
+  until Ch = #27;
 end;
 
 procedure DrawRoomList;
@@ -139,6 +216,28 @@ begin
   SetColor(Cyan, Black);
   WriteAt(1, 23, 'Up/Down: Select  E: Edit  D: Delete  A: Add  Esc: Back');
   ResetColor;
+end;
+
+{ Offers to pair up the exits of a room just saved - one prompt for the whole
+  form rather than one per field. PairExits does the work so that this editor
+  and editor-tv behave identically. }
+procedure OfferReverseExits(RoomIdx: Integer);
+var
+  Count: Integer;
+  Ch: Char;
+begin
+  Count := PairExits(World, RoomIdx, False);
+  if Count = 0 then Exit;
+
+  SetColor(Yellow, Black);
+  WriteAt(1, 24, 'Create ' + IntToStr(Count) +
+                 ' matching return exit(s)? (Y/N) ');
+  ResetColor;
+  Ch := ReadKey;
+  if UpCase(Ch) <> 'Y' then Exit;
+
+  PairExits(World, RoomIdx, True);
+  Modified := True;
 end;
 
 procedure EditRoomForm(RoomIdx: Integer; IsNew: Boolean);
@@ -286,11 +385,22 @@ begin
             begin
               if IsNew then
               begin
+                { Bound before incrementing, or RoomCount runs past the array }
+                if World.RoomCount >= MAX_ROOMS then
+                begin
+                  SetColor(LightRed, Black);
+                  WriteAt(1, 24, 'Maximum of ' + IntToStr(MAX_ROOMS) +
+                                 ' rooms reached. Press any key...');
+                  ResetColor;
+                  ReadKey;
+                  Exit;
+                end;
                 Inc(World.RoomCount);
                 RoomIdx := World.RoomCount;
               end;
               World.Rooms[RoomIdx] := R;
               Modified := True;
+              OfferReverseExits(RoomIdx);
               Exit;
             end;
           #72: { Up }
@@ -1229,7 +1339,7 @@ begin
 
   SetColor(Cyan, Black);
   WriteAt(1, 22, 'Numbers are printed in the booklet, so deleting leaves a gap.');
-  WriteAt(1, 23, 'Up/Down: Select  E: Edit  A: Add  D: Delete  X: Export booklet  Esc');
+  WriteAt(1, 23, 'Up/Dn Select  E Edit  A Add  D Del  X Booklet  R Xref  Esc');
   ResetColor;
 end;
 
@@ -1277,6 +1387,33 @@ begin
 
   SetColor(LightGreen, Black);
   WriteAt(1, 24, 'Wrote ' + FileName + '. Press any key...              ');
+  ResetColor;
+  ReadKey;
+end;
+
+{ The author's companion to the booklet. Kept as a separate file because the
+  booklet is what the player is handed, and a list of what fires when would
+  spoil it. }
+procedure ExportXRef;
+var
+  FileName: string;
+begin
+  SetColor(Cyan, Black);
+  WriteAt(1, 24, 'Cross-reference file [ORBXREF.TXT]: ');
+  ResetColor;
+  FileName := ReadLine(37, 24, 40);
+  if FileName = '' then FileName := 'ORBXREF.TXT';
+
+  if WriteParaXRef(FileName, World) then
+  begin
+    SetColor(LightGreen, Black);
+    WriteAt(1, 24, 'Wrote ' + FileName + '. Press any key...              ');
+  end
+  else
+  begin
+    SetColor(LightRed, Black);
+    WriteAt(1, 24, 'Could not write ' + FileName + '. Press any key...    ');
+  end;
   ResetColor;
   ReadKey;
 end;
@@ -1356,6 +1493,8 @@ begin
         end;
       'X':
         ExportBooklet;
+      'R':
+        ExportXRef;
       #27:
         Exit;
     end;
@@ -1382,6 +1521,7 @@ begin
       '5': HandleMobList;
       '6': EditMobForm(0, True);
       'P': HandleParagraphList;
+      'V': ValidateForm;
       '7': WorldSettings;
       '8': LoadWorldFile;
       '9': SaveWorldFile;

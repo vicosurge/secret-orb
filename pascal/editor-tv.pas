@@ -6,7 +6,7 @@ program EditorTV;
 
 uses
   Objects, Drivers, Views, Menus, App, Dialogs, MsgBox, Editors, SysUtils,
-  GameData, DataFile;
+  GameData, DataFile, WorldVal;
 
 const
   VERSION = '0.3.0-TV';
@@ -36,12 +36,14 @@ const
 
   cmWorldSettings = 500;
   cmAbout         = 501;
+  cmValidate      = 502;
 
   cmListParas     = 600;
   cmAddPara       = 601;
   cmEditPara      = 602;
   cmDeletePara    = 603;
   cmExportBooklet = 604;
+  cmExportXRef    = 605;
 
 type
   { Main application class }
@@ -87,11 +89,19 @@ type
     procedure AddParagraph;
     procedure EditParagraphByNumber(Num: Integer);
     procedure ExportBooklet;
+    procedure ExportXRef;
 
     { World operations }
     procedure WorldSettings;
+    procedure ValidateWorldDlg;
+    procedure OfferReverseExits(RoomIdx: Integer);
     procedure ShowAbout;
   end;
+
+var
+  { Validation scratch. Global because a TIssueList is about 15KB - more than
+    belongs on the stack, and nothing here validates reentrantly. }
+  Issues: TIssueList;
 
 { Utility functions }
 function StrToIntDef(const S: string; Default: Integer): Integer;
@@ -173,12 +183,15 @@ begin
       NewItem('~A~dd Paragraph', '', kbNoKey, cmAddPara, hcNoContext,
       NewLine(
       NewItem('Export ~B~ooklet...', '', kbNoKey, cmExportBooklet, hcNoContext,
-      nil))))),
+      NewItem('Export ~C~ross-reference...', '', kbNoKey, cmExportXRef,
+              hcNoContext,
+      nil )))))),
     NewSubMenu('~W~orld', hcNoContext, NewMenu(
       NewItem('~S~ettings...', '', kbNoKey, cmWorldSettings, hcNoContext,
+      NewItem('~V~alidate...', '', kbNoKey, cmValidate, hcNoContext,
       NewLine(
       NewItem('~A~bout...', '', kbNoKey, cmAbout, hcNoContext,
-      nil)))),
+      nil))))),
     nil)))))))));
 end;
 
@@ -207,8 +220,10 @@ begin
       cmListParas:     ListParagraphs;
       cmAddPara:       AddParagraph;
       cmExportBooklet: ExportBooklet;
+      cmExportXRef:    ExportXRef;
 
       cmWorldSettings: WorldSettings;
+      cmValidate:      ValidateWorldDlg;
       cmAbout:         ShowAbout;
     else
       Exit;
@@ -765,6 +780,7 @@ begin
     Modified := True;
 
     MessageBox('Room added successfully!', nil, mfInformation + mfOKButton);
+    OfferReverseExits(World.RoomCount);
   end;
 
   Dispose(Dialog, Done);
@@ -944,6 +960,7 @@ begin
     Modified := True;
 
     MessageBox('Room updated successfully!', nil, mfInformation + mfOKButton);
+    OfferReverseExits(Index);
   end;
 
   Dispose(Dialog, Done);
@@ -2010,6 +2027,56 @@ begin
   Dispose(Dialog, Done);
 end;
 
+{ The author's companion to the booklet: what fires each paragraph. A separate
+  file, because the booklet itself goes to the player. }
+procedure TEditorApp.ExportXRef;
+var
+  Dialog: PDialog;
+  R: TRect;
+  InputField: PInputLine;
+  Control: Word;
+  Filename, DefaultFile: string;
+begin
+  R.Assign(15, 8, 65, 14);
+  Dialog := New(PDialog, Init(R, 'Export Cross-reference'));
+
+  with Dialog^ do
+  begin
+    R.Assign(3, 2, 47, 3);
+    Insert(New(PStaticText, Init(R, 'Cross-reference filename:')));
+
+    R.Assign(3, 3, 47, 4);
+    InputField := New(PInputLine, Init(R, 255));
+    DefaultFile := 'ORBXREF.TXT';
+    InputField^.SetData(DefaultFile);
+    Insert(InputField);
+
+    R.Assign(10, 5, 20, 7);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+
+    R.Assign(25, 5, 35, 7);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+
+  if Control = cmOK then
+  begin
+    Filename := '';
+    InputField^.GetData(Filename);
+    if Filename <> '' then
+    begin
+      if WriteParaXRef(Filename, World) then
+        MessageBox('Cross-reference written.', nil,
+                   mfInformation + mfOKButton)
+      else
+        MessageBox('Error writing cross-reference!', nil, mfError + mfOKButton);
+    end;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
 procedure TEditorApp.ExportBooklet;
 var
   Dialog: PDialog;
@@ -2244,6 +2311,76 @@ begin
     MessageBox('World settings updated!', nil, mfInformation + mfOKButton);
   end;
 
+  Dispose(Dialog, Done);
+end;
+
+{ Offers to pair up the exits of a room that was just added or edited. Shares
+  PairExits with the lightweight editor, so both offer the same thing. }
+procedure TEditorApp.OfferReverseExits(RoomIdx: Integer);
+var
+  Count: Integer;
+begin
+  Count := PairExits(World, RoomIdx, False);
+  if Count = 0 then Exit;
+
+  if MessageBox('Create ' + IntToStr(Count) +
+                ' matching return exit(s)?', nil,
+                mfConfirmation + mfYesButton + mfNoButton) = cmYes then
+  begin
+    PairExits(World, RoomIdx, True);
+    Modified := True;
+  end;
+end;
+
+{ The same checks the lightweight editor and the browser editor run, so a world
+  that passes in one passes in all three. Read-only: it reports, it never
+  edits, because the fix for most of these is an authoring decision. }
+procedure TEditorApp.ValidateWorldDlg;
+var
+  Dialog: PDialog;
+  R: TRect;
+  ListBox: PListBox;
+  ScrollBar: PScrollBar;
+  Items: PStringCollection;
+  Count, Errors, I: Integer;
+begin
+  Count := ValidateWorld(World, Issues);
+
+  if Count = 0 then
+  begin
+    MessageBox('No problems found.', nil, mfInformation + mfOKButton);
+    Exit;
+  end;
+
+  Errors := 0;
+  Items := New(PStringCollection, Init(Count, 10));
+  for I := 1 to Count do
+  begin
+    if Issues[I].Level = ilError then Inc(Errors);
+    Items^.Insert(NewStr(IssueLevelName(Issues[I].Level) + ' [' +
+                         Issues[I].Where + '] ' + Issues[I].Text));
+  end;
+
+  R.Assign(2, 2, 78, 22);
+  Dialog := New(PDialog, Init(R, 'World Check - ' + IntToStr(Errors) +
+                              ' error(s), ' + IntToStr(Count - Errors) +
+                              ' warning(s)'));
+
+  with Dialog^ do
+  begin
+    R.Assign(72, 2, 73, 16);
+    ScrollBar := New(PScrollBar, Init(R));
+    R.Assign(2, 2, 72, 16);
+    ListBox := New(PListBox, Init(R, 1, ScrollBar));
+    ListBox^.NewList(Items);
+    Insert(ListBox);
+    Insert(ScrollBar);
+
+    R.Assign(32, 17, 42, 19);
+    Insert(New(PButton, Init(R, '~C~lose', cmCancel, bfDefault)));
+  end;
+
+  Desktop^.ExecView(Dialog);
   Dispose(Dialog, Done);
 end;
 

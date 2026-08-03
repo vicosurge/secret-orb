@@ -110,6 +110,7 @@ procedure InitObject(var O: TGameObject);
 procedure InitMob(var M: TMob);
 procedure InitWorld(var W: TGameWorld);
 function GetExitName(Dir: TDirection): string;
+function OppositeDir(Dir: TDirection): TDirection;
 function ParseDirection(const S: string): TDirection;
 function DirectionValid(Dir: TDirection): Boolean;
 function FindObjectByID(var W: TGameWorld; ID: Word): Integer;
@@ -213,6 +214,22 @@ begin
     dirDown:  Result := 'Down';
   else
     Result := '?';
+  end;
+end;
+
+{ The way back. Used by the editors to offer a matching return exit and by the
+  validator to spot exits that have none. }
+function OppositeDir(Dir: TDirection): TDirection;
+begin
+  case Dir of
+    dirNorth: Result := dirSouth;
+    dirSouth: Result := dirNorth;
+    dirEast:  Result := dirWest;
+    dirWest:  Result := dirEast;
+    dirUp:    Result := dirDown;
+    dirDown:  Result := dirUp;
+  else
+    Result := Dir;
   end;
 end;
 

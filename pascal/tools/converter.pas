@@ -38,7 +38,7 @@ begin
           World.MobCount, ' mobs');
 
   WriteLn('Saving: ', OutputFile);
-  if not SaveWorldBinary(OutputFile, World) then
+  if not SaveWorldAs(OutputFile, World, sfBinary) then
   begin
     WriteLn('Error: Failed to save output file');
     Halt(3);

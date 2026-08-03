@@ -332,6 +332,66 @@ begin
   if Pos('READ', Upper) > 0 then Include(Result, ofRead);
 end;
 
+{ Raw reference text exactly as written in the file, held between the two
+  passes. A reference is either a numeric ID or a VAR name, and a VAR may be
+  used before the block that defines it, so none of these can be resolved while
+  the first pass is still running. Unit-level rather than local because this is
+  roughly 20KB - too much to put on the DOS stack. }
+var
+  ExitRefs: array[1..MAX_ROOMS] of array[TDirection] of string[10];
+  ObjRoomRefs: array[1..MAX_OBJECTS] of string[10];
+  ObjCarriedRefs: array[1..MAX_OBJECTS] of string[10];
+  MobRoomRefs: array[1..MAX_MOBS] of string[10];
+
+procedure ClearRefs;
+var
+  I: Integer;
+  D: TDirection;
+begin
+  for I := 1 to MAX_ROOMS do
+    for D := Low(TDirection) to High(TDirection) do
+      ExitRefs[I][D] := '';
+  for I := 1 to MAX_OBJECTS do
+  begin
+    ObjRoomRefs[I] := '';
+    ObjCarriedRefs[I] := '';
+  end;
+  for I := 1 to MAX_MOBS do
+    MobRoomRefs[I] := '';
+end;
+
+{ Resolves one stored reference. A literal number is taken as an ID; anything
+  else is looked up in the symbol table. A name that resolves to nothing is
+  reported - it used to become 0 silently, which produced a room with a missing
+  exit and no indication of why. }
+function ResolveRef(var P: TBPLParser; const Ref, Context: string): Word;
+var
+  I: Integer;
+  AllDigits: Boolean;
+begin
+  Result := 0;
+  if (Ref = '') or (Ref = '0') then Exit;
+
+  AllDigits := True;
+  for I := 1 to Length(Ref) do
+    if (Ref[I] < '0') or (Ref[I] > '9') then
+    begin
+      AllDigits := False;
+      Break;
+    end;
+
+  if AllDigits then
+  begin
+    Result := StrToIntDef(Ref, 0);
+    Exit;
+  end;
+
+  Result := ResolveVAR(P, Ref);
+  if Result = 0 then
+    AddError(P, beBrokenReference,
+             'Undefined VAR "' + Ref + '" referenced by ' + Context);
+end;
+
 { Main BPL loading function }
 function LoadWorldBPL(const FileName: string; var W: TGameWorld): Boolean;
 var
@@ -359,6 +419,7 @@ begin
   Result := False;
   InitParser(GlobalParser);
   InitWorld(W);
+  ClearRefs;
 
   {$I-}
   Assign(F, FileName);
@@ -462,19 +523,28 @@ begin
           begin
             if TempVAR <> '' then
             begin
-              Inc(W.RoomCount);
-              CurrentRoom := W.RoomCount;
-              if CurrentRoom <= MAX_ROOMS then
+              { Bound first, then increment. Incrementing first left RoomCount
+                past the end of the array on overflow, and every later loop
+                over 1..RoomCount - including the save path - read garbage. }
+              if W.RoomCount >= MAX_ROOMS then
+                AddError(GlobalParser, beValueTooLong,
+                         'More than ' + IntToStr(MAX_ROOMS) + ' rooms')
+              else
               begin
+                Inc(W.RoomCount);
+                CurrentRoom := W.RoomCount;
                 W.Rooms[CurrentRoom].ID := TempOC;
                 W.Rooms[CurrentRoom].Name := TempName;
                 W.Rooms[CurrentRoom].Desc := TempDesc;
                 W.Rooms[CurrentRoom].Points := TempPoints;
                 W.Rooms[CurrentRoom].FirstVisitPara := TempFirstVisit;
                 W.Rooms[CurrentRoom].Active := True;
-                { Store exit VARs temporarily - resolve in second pass }
+                { Exits are kept as written and resolved in the second pass }
                 for Dir := Low(TDirection) to High(TDirection) do
-                  W.Rooms[CurrentRoom].Exits[Dir] := StrToIntDef(TempExits[Dir], 0);
+                begin
+                  ExitRefs[CurrentRoom][Dir] := TempExits[Dir];
+                  W.Rooms[CurrentRoom].Exits[Dir] := DIR_NONE;
+                end;
                 RegisterVAR(GlobalParser, TempVAR, 'R', TempOC);
               end;
             end;
@@ -483,15 +553,20 @@ begin
           begin
             if TempVAR <> '' then
             begin
-              Inc(W.ObjectCount);
-              CurrentObject := W.ObjectCount;
-              if CurrentObject <= MAX_OBJECTS then
+              if W.ObjectCount >= MAX_OBJECTS then
+                AddError(GlobalParser, beValueTooLong,
+                         'More than ' + IntToStr(MAX_OBJECTS) + ' objects')
+              else
               begin
+                Inc(W.ObjectCount);
+                CurrentObject := W.ObjectCount;
                 W.Objects[CurrentObject].ID := TempOC;
                 W.Objects[CurrentObject].Name := TempName;
                 W.Objects[CurrentObject].Desc := TempDesc;
-                W.Objects[CurrentObject].RoomID := StrToIntDef(TempRoomID, 0);
-                W.Objects[CurrentObject].CarriedBy := StrToIntDef(TempCarriedBy, 0);
+                ObjRoomRefs[CurrentObject] := TempRoomID;
+                ObjCarriedRefs[CurrentObject] := TempCarriedBy;
+                W.Objects[CurrentObject].RoomID := 0;
+                W.Objects[CurrentObject].CarriedBy := 0;
                 W.Objects[CurrentObject].Flags := TempFlags;
                 W.Objects[CurrentObject].UseText := TempUseText;
                 W.Objects[CurrentObject].Points := TempPoints;
@@ -505,14 +580,18 @@ begin
           begin
             if TempVAR <> '' then
             begin
-              Inc(W.MobCount);
-              CurrentMob := W.MobCount;
-              if CurrentMob <= MAX_MOBS then
+              if W.MobCount >= MAX_MOBS then
+                AddError(GlobalParser, beValueTooLong,
+                         'More than ' + IntToStr(MAX_MOBS) + ' mobs')
+              else
               begin
+                Inc(W.MobCount);
+                CurrentMob := W.MobCount;
                 W.Mobs[CurrentMob].ID := TempOC;
                 W.Mobs[CurrentMob].Name := TempName;
                 W.Mobs[CurrentMob].Desc := TempDesc;
-                W.Mobs[CurrentMob].RoomID := StrToIntDef(TempRoomID, 0);
+                MobRoomRefs[CurrentMob] := TempRoomID;
+                W.Mobs[CurrentMob].RoomID := 0;
                 W.Mobs[CurrentMob].Dialogue := TempDialogue;
                 W.Mobs[CurrentMob].FirstTalkPara := TempFirstTalk;
                 W.Mobs[CurrentMob].Active := True;
@@ -609,34 +688,35 @@ begin
 
   Close(F);
 
-  { Second pass: Resolve VAR references }
+  { Second pass: resolve the references held from the first pass. It has to be
+    a separate pass because a VAR may be used before the block defining it.
+    Line 0 rather than the last line read: an error found here belongs to no
+    particular line, and reporting EOF would send an author to the wrong place. }
+  GlobalParser.CurrentLine := 0;
   for I := 1 to W.RoomCount do
-  begin
     if W.Rooms[I].Active then
-    begin
-      { Room exits are stored as VAR references during first pass }
-      { For now, we assume numeric IDs were used directly }
-      { A more complete implementation would store VARs and resolve here }
-    end;
-  end;
+      for Dir := Low(TDirection) to High(TDirection) do
+        W.Rooms[I].Exits[Dir] :=
+          ResolveRef(GlobalParser, ExitRefs[I][Dir],
+                     'the ' + GetExitName(Dir) + ' exit of room ' +
+                     IntToStr(W.Rooms[I].ID));
 
-  { Resolve object room references }
   for I := 1 to W.ObjectCount do
-  begin
     if W.Objects[I].Active then
     begin
-      { RoomID is already numeric from first pass }
+      W.Objects[I].RoomID :=
+        ResolveRef(GlobalParser, ObjRoomRefs[I],
+                   'the room of object ' + IntToStr(W.Objects[I].ID));
+      W.Objects[I].CarriedBy :=
+        ResolveRef(GlobalParser, ObjCarriedRefs[I],
+                   'the carrier of object ' + IntToStr(W.Objects[I].ID));
     end;
-  end;
 
-  { Resolve mob room references }
   for I := 1 to W.MobCount do
-  begin
     if W.Mobs[I].Active then
-    begin
-      { RoomID is already numeric from first pass }
-    end;
-  end;
+      W.Mobs[I].RoomID :=
+        ResolveRef(GlobalParser, MobRoomRefs[I],
+                   'the room of mob ' + IntToStr(W.Mobs[I].ID));
 
   W.MaxScore := ComputeMaxScore(W);
   Result := (W.RoomCount > 0) and (GlobalParser.ErrorCount = 0);
