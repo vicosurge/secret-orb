@@ -23,9 +23,12 @@ case "${1:-native}" in
         echo "Build complete. Binaries in ${BINDIR}/"
         ;;
     dos32)
+        # A go32v2 build needs the cross-compiler that dos/bootstrap-toolchain.sh
+        # builds, the 8.3 source duplicate and a separate unit directory. That
+        # all lives in the Makefile; there is no point keeping a second copy of
+        # it here that would only rot.
         echo "Building for DOS (32-bit DPMI)..."
-        $FPC $FPCFLAGS -Tgo32v2 -o"${BINDIR}/secretorb.exe" secretorb.pas
-        $FPC $FPCFLAGS -Tgo32v2 -o"${BINDIR}/editor.exe" editor.pas
+        exec make dos32
         ;;
     win32)
         echo "Building for Windows 32-bit..."

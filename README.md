@@ -171,8 +171,7 @@ make native
 # Build the converter tool
 make converter
 
-# Cross-compile for other platforms
-make dos32    # DOS 32-bit DPMI
+# Cross-compile for Windows
 make win32    # Windows 32-bit
 
 # Check size constraints (720KB floppy)
@@ -181,6 +180,27 @@ make sizecheck
 # Clean build artifacts
 make clean
 ```
+
+#### Building for DOS
+
+No distribution ships a go32v2 cross-compiler, so one is built from pinned
+Free Pascal sources the first time:
+
+```bash
+cd secret-orb/pascal
+
+dos/bootstrap-toolchain.sh   # once, ~8 minutes
+make dos32                   # bin/dos/SECORB.EXE, EDITOR.EXE
+make dos-test                # boots them on FreeDOS under QEMU and checks the output
+make dos-dist                # secretorb-dos32.zip and a 720KB floppy image
+```
+
+`make dos-test` needs `qemu-system-i386`, `mtools` and `dosfstools`. The DOS
+binaries and the world are also written to a real 720KB FAT12 image, so a
+distribution that no longer fits on the floppy fails the build.
+
+`pascal/BUILD.BAT` still builds the game from inside DOS itself, with a
+DOS-hosted FPC. See `pascal/dos/README.md`.
 
 #### Compiler Flags
 

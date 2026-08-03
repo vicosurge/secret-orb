@@ -1,0 +1,44 @@
+SECRET ORB - DOS EDITION
+========================
+
+A text adventure that fits on a 720KB floppy.
+
+FILES
+-----
+SECORB.EXE    The game.
+EDITOR.EXE    The world editor.
+WORLD.DAT     The shipped world. SECORB.EXE loads this by default.
+CWSDPMI.EXE   DPMI host, see below.
+CWSDPMI.DOC   Its documentation and licence.
+
+RUNNING
+-------
+    SECORB
+    SECORB MYWORLD.DAT
+
+To build or change a world:
+
+    EDITOR
+
+REQUIREMENTS
+------------
+A 386 or better, and about 2MB of free memory.
+
+These are 32-bit protected mode programs and need a DPMI host. Under plain
+DOS, CWSDPMI.EXE supplies one: keep it in the same directory as SECORB.EXE
+and it loads by itself. Under Windows, OS/2, or with a memory manager that
+already provides DPMI (QEMM, or EMM386 with a DPMI server), it is not used
+and can be deleted.
+
+CWSDPMI is by CW Sandmann and is distributed under the GNU GPL; the sources
+are at http://sandmann.dotster.com/cwsdpmi/ and its terms are in CWSDPMI.DOC.
+
+SAVED GAMES
+-----------
+SAVE and LOAD inside the game take a file name:
+
+    SAVE MYGAME
+    LOAD MYGAME
+
+A saved game records your position in a particular world, not the world
+itself, and refuses to load against a world it does not match.

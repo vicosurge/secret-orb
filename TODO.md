@@ -56,8 +56,10 @@ direction, which is usually enough to find it.
 
 ## Verification notes
 
-- The `dos32` and `win32` targets cannot be built locally; those cross-compilers
-  are not installed here. CI covers all three platforms.
+- The `win32` target cannot be built locally; that cross-compiler is not
+  installed here. CI covers it. The `dos32` target now builds anywhere:
+  `pascal/dos/bootstrap-toolchain.sh` builds the go32v2 cross-compiler from
+  pinned sources, and `make dos-test` runs the result on FreeDOS under QEMU.
 - `pascal/src/worldval.pas` is editor-side only. It must never appear in
   `secretorb.pas`'s `uses` clause — the game has no room for authoring checks.
 - FPC's CRT unit only emits ANSI positioning when stdout is a terminal, and it

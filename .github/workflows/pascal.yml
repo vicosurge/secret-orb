@@ -238,64 +238,71 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for DOS cross-compiler
-        id: check-dos
+      # fpc is the host compiler the cross-compiler is built with, and also
+      # builds the native tools the DOS run is compared against. qemu, mtools
+      # and dosfstools are for the FreeDOS test run and the floppy image.
+      - name: Install build dependencies
         run: |
-          # Ubuntu's FPC package doesn't include go32v2 cross-compiler
-          # We need to check if it's available
           sudo apt-get update
-          sudo apt-get install -y fpc
+          sudo apt-get install -y fpc qemu-system-x86 mtools dosfstools zip unzip curl
+          fpc -iV   # the cross-compiler is built with this; 3.2.2 matches the pinned sources
 
-          # Test if go32v2 target is available
-          if fpc -h 2>&1 | grep -q "go32v2"; then
-            echo "dos_available=true" >> $GITHUB_OUTPUT
-          else
-            echo "dos_available=false" >> $GITHUB_OUTPUT
-            echo "Note: DOS cross-compiler (go32v2) not available in this FPC installation"
-          fi
+      # No distribution packages a go32v2 cross-compiler, so we build one from
+      # pinned sources. It changes only when dos/versions.sh or the bootstrap
+      # script does, hence the cache key: a hit turns an 8 minute build into a
+      # download. Restoring only ~/.cache/secretorb-dos, not the source
+      # tarballs under dl/, which the pruning step below drops.
+      - name: Cache the go32v2 toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/secretorb-dos
+          key: dos-toolchain-${{ runner.os }}-${{ hashFiles('pascal/dos/versions.sh', 'pascal/dos/bootstrap-toolchain.sh') }}
 
-      - name: Build DOS 32-bit binaries
-        if: steps.check-dos.outputs.dos_available == 'true'
+      - name: Build the go32v2 cross-compiler
+        working-directory: pascal
+        run: dos/bootstrap-toolchain.sh
+
+      - name: Build DOS binaries
+        working-directory: pascal
+        run: make dos32
+
+      # Boots the binaries on real FreeDOS under QEMU and checks the output of
+      # the console tools: that the unit tests still pass under DOS, that the
+      # shipped world validates, and that the DOS converter writes byte for
+      # byte the same world file as the Linux one.
+      - name: Run the DOS tests under FreeDOS
+        working-directory: pascal
+        run: make dos-test
+
+      # Also builds secretorb-720k.img. If the distribution ever outgrows the
+      # 720KB floppy the project is built around, this step fails rather than
+      # printing a warning nobody reads.
+      - name: Package the DOS build
+        working-directory: pascal
+        run: make dos-dist
+
+      - name: Check DOS binary sizes
         working-directory: pascal
         run: |
-          mkdir -p bin
-          fpc -Tgo32v2 -O2 -XX -CX -Xs -Fusrc -obin/SECORB.EXE secretorb.pas
-          fpc -Tgo32v2 -O2 -XX -CX -Xs -Fusrc -obin/EDITOR.EXE editor.pas
+          echo "=== DOS binaries ==="
+          ls -lh dist/SECORB/
+          echo ""
+          echo "=== 720KB floppy image ==="
+          mdir -i secretorb-720k.img ::
 
-      - name: Package DOS build
-        if: steps.check-dos.outputs.dos_available == 'true'
-        working-directory: pascal
-        run: |
-          mkdir -p dist/SECORB
-          cp bin/SECORB.EXE bin/EDITOR.EXE dist/SECORB/
-          cp data/world.dat dist/SECORB/WORLD.DAT
-          cd dist && zip -r ../secretorb-dos32.zip SECORB/
-
-      - name: Create placeholder (DOS unavailable)
-        if: steps.check-dos.outputs.dos_available != 'true'
-        working-directory: pascal
-        run: |
-          mkdir -p dist/SECORB
-          cat > dist/SECORB/README.txt << 'ENDREADME'
-          DOS Build Not Available
-          ========================
-          The go32v2 (DOS 32-bit DPMI) cross-compiler is not available
-          in GitHub Actions' Ubuntu runner.
-
-          To build DOS executables locally:
-          1. Install FPC with go32v2 cross-compiler support
-          2. Run: fpc -Tgo32v2 -O2 secretorb.pas
-          3. Run: fpc -Tgo32v2 -O2 editor.pas
-
-          The resulting .EXE files will run on DOS with CWSDPMI.
-          ENDREADME
-          cd dist && zip -r ../secretorb-dos32.zip SECORB/
+      # The FPC and djgpp tarballs are 160MB and are only needed for a rebuild
+      # from scratch, which a cache hit skips. The FreeDOS image stays: every
+      # run of the test harness needs it.
+      - name: Prune source tarballs before the cache is saved
+        run: rm -f ~/.cache/secretorb-dos/dl/fpcbuild-*.tar.gz ~/.cache/secretorb-dos/dl/djgpp-*.tar.bz2
 
       - name: Upload DOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: secretorb-dos32
-          path: pascal/secretorb-dos32.zip
+          path: |
+            pascal/secretorb-dos32.zip
+            pascal/secretorb-720k.img
 
   release:
     needs: [build-linux, build-windows, build-dos32]
@@ -317,4 +324,5 @@ jobs:
           path: |
             secretorb-*.tar.gz
             secretorb-*.zip
+            secretorb-*.img
           retention-days: 30

@@ -22,7 +22,6 @@ make native
 Build for specific platforms:
 ```bash
 cd pascal
-make dos32      # DOS 32-bit DPMI (requires go32v2 cross-compiler)
 make win32      # Windows 32-bit
 ```
 
@@ -39,6 +38,44 @@ cd pascal
 make clean
 ```
 
+### Building for DOS
+
+```bash
+cd pascal
+dos/bootstrap-toolchain.sh   # once: builds the go32v2 cross-compiler (~8 min)
+make dos32                   # bin/dos/*.EXE
+make dos-test                # runs them on FreeDOS under QEMU
+make dos-dist                # secretorb-dos32.zip + secretorb-720k.img
+```
+
+No distribution packages a go32v2 cross-compiler, so `dos/bootstrap-toolchain.sh`
+builds one from pinned Free Pascal sources into `~/.cache/secretorb-dos`. Two
+things about that build are load-bearing and easy to trip over:
+
+- The go32v2 RTL needs **djgpp binutils** to assemble `v2prt0.as` into a COFF-go32
+  object; host binutils cannot. The script pins a djgpp release for this and uses
+  nothing from it but `as`/`ld`/`ar`/`strip`.
+- **`Crt` is not in the RTL** for go32v2 — it lives in the `rtl-console` package,
+  and cross-building the package set dies inside `fpmake` with a heap overflow.
+  The script compiles that one unit directly and skips the packages stage. It is
+  not optional: `secorb.pas`, `editor.pas`, `gamecore.pas` and `display.pas` all
+  use it.
+
+`make dos32` builds **`secorb.pas`**, not `secretorb.pas` — the 8.3-named duplicate
+is what ships on DOS, which is the other reason the two files must stay identical.
+It also builds `VALIDATE.EXE`, `CONVERT.EXE` and `PAIRTEST.EXE`, which are not part
+of the distribution: they are what `make dos-test` runs inside FreeDOS. Those three
+are plain `WriteLn` programs, so DOS output redirection captures them; the game and
+the editor use `Crt`, which writes to video memory and reads the BIOS keyboard, and
+cannot be driven through a pipe at all.
+
+`make dos-dist` builds a real 720KB FAT12 floppy image alongside the zip. That is
+the size constraint as a build step rather than a warning: if the distribution
+outgrows the disk, `mcopy` fails and the build fails with it.
+
+`pascal/BUILD.BAT` is unchanged and still builds Secret Orb from inside DOS with a
+DOS-hosted FPC. See `pascal/dos/README.md` for the details of both paths.
+
 ### Running
 
 ```bash
@@ -49,7 +86,11 @@ cd pascal/bin
 
 ### CI/CD
 
-GitHub Actions builds for Linux, Windows, and DOS on every push to main. See `.github/workflows/pascal.yml`.
+GitHub Actions builds for Linux, Windows, and DOS on every push to main. See
+`.github/workflows/pascal.yml`. The DOS job builds the cross-compiler (cached on
+`pascal/dos/versions.sh`), then boots the binaries on FreeDOS under QEMU: the unit
+tests must pass under DOS, the shipped world must validate, and the DOS converter
+must produce byte-identical world files to the Linux one.
 
 ## Architecture
 
@@ -332,14 +373,22 @@ Free Pascal compiler flags (see Makefile):
 - `-Fu<dir>`: Search directory for units
 
 Target-specific:
-- `-Tgo32v2`: DOS 32-bit DPMI (requires CWSDPMI at runtime)
+- `-Tgo32v2`: DOS 32-bit DPMI (requires CWSDPMI at runtime). Baked into the
+  `fpc-go32v2` wrapper the DOS bootstrap writes, along with `-XP` for the djgpp
+  binutils and the `-Fu` for the go32v2 units — call the wrapper, not `fpc`
 - `-Twin32`: Windows 32-bit
 - `-Twin16 -WD`: DOS 16-bit real mode (less common)
+
+The DOS build also passes `-FUbin/dos/units`. go32v2 and native unit files share
+their names and differ by architecture, so without a separate output directory
+`make native` after `make dos32` would trip over the wrong `.ppu` files.
 
 ## Size Constraints
 
 The project must fit on a 720KB (737,280 bytes) floppy disk. CI checks verify this constraint:
 - secretorb + editor + world.dat < 720KB
+- `make dos-dist` writes the DOS distribution onto a real 720KB FAT12 image, so
+  overflowing the disk fails the build instead of printing a warning
 - Use size-optimized compiler flags (`-XX`, `-CX`, `-Xs`)
 - Minimize world file content in default distribution
 

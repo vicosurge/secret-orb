@@ -15,3 +15,6 @@ pascal/bin/*.exe
 
 # Release staging directory (make release / make sizecheck)
 pascal/release/
+
+# DOS floppy image (make dos-dist)
+pascal/*.img
