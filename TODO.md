@@ -12,33 +12,13 @@ been fixed. Regression cover for them now lives in CI: the `converter`,
 test, world files are checked for byte-reproducibility, and `secretorb.pas` is
 diffed against its DOS 8.3 duplicate `secorb.pas`.
 
----
-
-## 1. The shipped demo world cannot be completed
-
-**Where:** `pascal/data/world.dat`
-
-`bin/validate data/world.dat` reports:
-
-```
-warn  [world] No win room is set, so the adventure cannot be completed.
-ERROR [room 3] Room "Shadow Room" cannot be reached from the start room.
-```
-
-Both are real. Room 3 has all six exits set to 0 and no other room points at
-it, so it is unreachable content; and with no `WINROOM` the game has no ending
-short of quitting.
-
-**Cost:** the demo that ships on the floppy is unfinishable, and a third of its
-rooms are dead. Anyone using it as a worked example is copying a broken world.
-
-**Fix:** a content decision, not a code one — connect Shadow Room to Back Room
-(or delete it) and set `WINROOM`, probably with `WINOBJECT` pointing at the
-Rusty Key. Left alone here because changing the shipped world is a design call.
+The unfinishable demo world is fixed too: Shadow Room is now reached north from
+Back Room, and carrying the Glowing Orb back to the entrance hall wins.
+`bin/validate data/world.dat` reports nothing, and CI now runs it.
 
 ---
 
-## 2. `ShowRoom` clips an over-long message instead of paging it
+## 1. `ShowRoom` clips an over-long message instead of paging it
 
 **Where:** `pascal/src/gamecore.pas`, the `LastMessage` block in `ShowRoom`
 
@@ -57,7 +37,7 @@ prompt.
 
 ---
 
-## 3. BPL second-pass errors have no line number
+## 2. BPL second-pass errors have no line number
 
 **Where:** `pascal/src/bplpars.pas`, the resolve pass in `LoadWorldBPL`
 

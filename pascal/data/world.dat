@@ -4,6 +4,9 @@
 [WORLD]
 TITLE=Secret Orb Demo
 START=1
+; Carry the Glowing Orb back to where you started
+WINROOM=1
+WINOBJECT=3
 
 [ROOM:1]
 NAME=Main Room
@@ -15,19 +18,21 @@ WEST=0
 
 [ROOM:2]
 NAME=Back Room
-DESC=This hidden chamber lies behind the main hall. Dust covers everything, and cobwebs hang from the ceiling. Strange symbols are carved into the floor.
-NORTH=0
+DESC=This hidden chamber lies behind the main hall. Dust covers everything, and cobwebs hang from the ceiling. Strange symbols are carved into the floor. A low doorway to the north opens onto darkness.
+NORTH=3
 SOUTH=1
 EAST=0
 WEST=0
+POINTS=5
 
 [ROOM:3]
 NAME=Shadow Room
-DESC=Darkness envelops you completely. You can barely make out the walls of this forgotten place. Something glimmers faintly in the distance.
+DESC=Darkness envelops you completely. You can barely make out the walls of this forgotten place. Something glimmers faintly in the distance. The way back lies south.
 NORTH=0
-SOUTH=0
+SOUTH=2
 EAST=0
 WEST=0
+POINTS=10
 
 [OBJECT:1]
 NAME=Rusty Key
@@ -44,6 +49,7 @@ ROOM=2
 CARRIEDBY=0
 FLAGS=pickup,read
 USETEXT=The scroll reads: "Seek the orb in the darkest room, where shadows dance and secrets loom."
+POINTS=5
 
 [OBJECT:3]
 NAME=Glowing Orb
@@ -52,6 +58,7 @@ ROOM=3
 CARRIEDBY=0
 FLAGS=pickup,use
 USETEXT=The orb grows warm in your hands, filling you with a sense of power and purpose.
+POINTS=25
 
 [MOB:1]
 NAME=Old Guard

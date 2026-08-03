@@ -48,6 +48,12 @@ jobs:
           fpc -O2 -XX -CX -Xs -Fusrc -obin/pairtest tools/pairtest.pas
           bin/pairtest
 
+      # The shipped world must stay completable: every room reachable, a win
+      # condition that can actually be met, no dangling references.
+      - name: Validate the shipped world
+        working-directory: pascal
+        run: bin/validate data/world.dat
+
       # Saving the same world twice must produce the same bytes, or world files
       # diff noisily and cannot be checksummed.
       - name: Check world files are byte-reproducible

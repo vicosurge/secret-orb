@@ -347,9 +347,13 @@ The project must fit on a 720KB (737,280 bytes) floppy disk. CI checks verify th
 
 `TODO.md` at the repo root lists known defects found during earlier work and
 deliberately left unfixed, with the cost and the fix for each. Check it before
-assuming a surprising behaviour is new — notably, **the shipped demo world
-cannot be completed**: it has no win room, and Shadow Room is unreachable.
-`bin/validate data/world.dat` reports both.
+assuming a surprising behaviour is new.
+
+`bin/validate data/world.dat` should always report nothing. The demo world is
+a fetch quest — go north twice, take the Glowing Orb, carry it back to the
+entrance hall — worth 45 points across two rooms and two objects. CI runs the
+validator, so a world change that breaks reachability or the win condition
+fails the build rather than shipping.
 
 ## Development Workflow
 
