@@ -42,7 +42,7 @@ make clean
 
 ```bash
 cd pascal
-dos/bootstrap-toolchain.sh   # once: builds the go32v2 cross-compiler (~8 min)
+dos/bootstrap-toolchain.sh   # once: builds the go32v2 cross-compiler (~1 min)
 make dos32                   # bin/dos/*.EXE
 make dos-test                # runs them on FreeDOS under QEMU
 make dos-dist                # secretorb-dos32.zip + secretorb-720k.img

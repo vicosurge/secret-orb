@@ -249,7 +249,7 @@ jobs:
 
       # No distribution packages a go32v2 cross-compiler, so we build one from
       # pinned sources. It changes only when dos/versions.sh or the bootstrap
-      # script does, hence the cache key: a hit turns an 8 minute build into a
+      # script does, hence the cache key: a hit turns a from-source compiler build into a
       # download. Restoring only ~/.cache/secretorb-dos, not the source
       # tarballs under dl/, which the pruning step below drops.
       - name: Cache the go32v2 toolchain

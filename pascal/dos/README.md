@@ -5,7 +5,7 @@ the result actually runs there.
 
 ```bash
 cd pascal
-dos/bootstrap-toolchain.sh   # once: builds the cross-compiler (~8 min)
+dos/bootstrap-toolchain.sh   # once: builds the cross-compiler (~1 min)
 make dos32                   # bin/dos/*.EXE          (~2 seconds)
 make dos-test                # runs them on FreeDOS   (~10 seconds)
 make dos-dist                # secretorb-dos32.zip + secretorb-720k.img

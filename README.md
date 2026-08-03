@@ -189,7 +189,7 @@ Free Pascal sources the first time:
 ```bash
 cd secret-orb/pascal
 
-dos/bootstrap-toolchain.sh   # once, ~8 minutes
+dos/bootstrap-toolchain.sh   # once, a minute or two
 make dos32                   # bin/dos/SECORB.EXE, EDITOR.EXE
 make dos-test                # boots them on FreeDOS under QEMU and checks the output
 make dos-dist                # secretorb-dos32.zip and a 720KB floppy image
