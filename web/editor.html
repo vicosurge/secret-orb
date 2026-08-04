@@ -405,9 +405,35 @@ const LIM = {
   TITLE: 40, ROOM_NAME: 40, ROOM_DESC: 255,
   OBJ_NAME: 30, OBJ_DESC: 100, USE_TEXT: 100,
   MOB_NAME: 30, MOB_DESC: 100, DIALOGUE: 200,
-  PARAGRAPHS: 128, PARA_LEN: 1600
+  PARAGRAPHS: 128, PARA_LEN: 1600,
+  EVENTS: 128, FLAGS: 64, COUNTERS: 32,
+  CONDITIONS: 4, ACTIONS: 8, EVENT_NAME: 40, EVENT_TEXT: 80, VAR_NAME: 30
 };
 const WF_BOOKLET = 0x01;
+
+/* Event enum spellings, in the order gamedata.pas declares them. The ordinal
+   is the array index and goes on disk as a byte, so these lists are
+   append-only: inserting a member reinterprets every world file ever
+   written. The names are what the text and BPL formats carry. */
+const TRIGGERS = ["ENTERROOM", "EXITROOM", "FIRSTVISIT", "TAKEOBJECT", "DROPOBJECT",
+                  "USEOBJECT", "USEOBJECTON", "EXAMINEOBJECT", "TALKTOMOB", "GIVETO",
+                  "TIMER", "FLAGSET", "FLAGCLEAR"];
+const CONDS = ["NONE", "HASOBJECT", "OBJECTINROOM", "MOBINROOM", "FLAGISSET",
+               "FLAGISCLEAR", "COUNTEREQUALS", "COUNTERGREATER", "COUNTERLESS",
+               "VISITEDROOM", "ROOMIS"];
+const ACTS = ["NONE", "SHOWMESSAGE", "SHOWPARAGRAPH", "SETFLAG", "CLEARFLAG",
+              "TOGGLEFLAG", "SETCOUNTER", "ADDCOUNTER", "SUBCOUNTER", "MOVEOBJECT",
+              "REMOVEOBJECT", "SPAWNOBJECT", "MOVEMOB", "REMOVEMOB", "UNLOCKEXIT",
+              "LOCKEXIT", "TELEPORTPLAYER", "ADDSCORE", "ENDGAME", "ENABLEEVENT",
+              "DISABLEEVENT"];
+// An unknown ordinal degrades to the inert member rather than being trusted,
+// which is how a file written by a newer build stays readable.
+const trigName = i => TRIGGERS[i] || TRIGGERS[0];
+const condName = i => CONDS[i] || CONDS[0];
+const actName = i => ACTS[i] || ACTS[0];
+const trigOrd = s => Math.max(0, TRIGGERS.indexOf(String(s).toUpperCase()));
+const condOrd = s => Math.max(0, CONDS.indexOf(String(s).toUpperCase()));
+const actOrd = s => Math.max(0, ACTS.indexOf(String(s).toUpperCase()));
 const DIRS = ["north", "south", "east", "west", "up", "down"];
 const DIR_LABEL = { north: "North", south: "South", east: "East", west: "West", up: "Up", down: "Down" };
 const OPPOSITE = { north: "south", south: "north", east: "west", west: "east", up: "down", down: "up" };
@@ -423,10 +449,21 @@ function blankWorld() {
   // paragraphs is a sparse map of number -> text. Numbers are printed in the
   // booklet, so deleting one must leave its number unused rather than shift
   // every later paragraph.
+  // events follows the same rule for a stronger reason: a save game's Fired
+  // and EvEnabled bitmaps are indexed by slot, and enable/disable actions
+  // name a slot, so compacting on save would repoint every existing save at
+  // the wrong events.
   return { title: "Untitled", startRoom: 1, winRoomID: 0, winObjectID: 0,
            introPara: 0, winPara: 0, losePara: 0, worldFlags: 0,
-           paragraphs: {}, rooms: [], objects: [], mobs: [] };
+           paragraphs: {}, rooms: [], objects: [], mobs: [],
+           events: {}, flagNames: {}, counterNames: {} };
 }
+function newEvent(name) {
+  return { name: name || "", trigger: "ENTERROOM", triggerID: 0, triggerID2: 0,
+           oneShot: true, enabled: true, conds: [], actions: [] };
+}
+function newCond() { return { type: "NONE", targetID: 0, value: 0, negate: false }; }
+function newAction() { return { type: "NONE", targetID: 0, value: 0, text: "" }; }
 function newRoom(id) {
   return { id, name: "", desc: "", exits: { north: 0, south: 0, east: 0, west: 0, up: 0, down: 0 },
            points: 0, firstVisitPara: 0 };
@@ -446,6 +483,25 @@ function paraCount() {
     if (world.paragraphs[k] && i > n) n = i;
   }
   return n;
+}
+
+// Slots in use, ascending. The engine walks events in slot order, so this is
+// also the order they fire in.
+function eventSlots(w) {
+  return Object.keys((w || world).events).map(k => k | 0)
+    .filter(i => i >= 1 && i <= LIM.EVENTS && (w || world).events[i])
+    .sort((a, b) => a - b);
+}
+// Highest used slot, which is what EventCount means on disk - not a count of
+// active ones. A gap costs nothing: each record carries its own number.
+function eventCount(w) {
+  const s = eventSlots(w);
+  return s.length ? s[s.length - 1] : 0;
+}
+// First free slot, for "add event".
+function nextEventSlot() {
+  for (let i = 1; i <= LIM.EVENTS; i++) if (!world.events[i]) return i;
+  return 0;
 }
 function paraNumbers() {
   return Object.keys(world.paragraphs)
@@ -501,7 +557,7 @@ function readShortString(view, off, maxLen) {
 const flagsToByte = f => (f.pickup ? 1 : 0) | (f.use ? 2 : 0) | (f.open ? 4 : 0) | (f.read ? 8 : 0);
 const byteToFlags = b => ({ pickup: !!(b & 1), use: !!(b & 2), open: !!(b & 4), read: !!(b & 8) });
 
-/* ---- Binary SORB version 3 --------------------------------------------
+/* ---- Binary SORB version 4 --------------------------------------------
    Record sizes and field offsets are taken from the packed records in
    pascal/src/datafile.pas: header 69, room 317, object 246, mob 343 bytes.
    Each version 3 record is its version 2 record with one Word appended, and
@@ -510,9 +566,112 @@ const byteToFlags = b => ({ pickup: !!(b & 1), use: !!(b & 2), open: !!(b & 4), 
    After the mob records comes the paragraph section:
      Uint16 count, then count times (Uint16 length, length bytes of text).
    A zero length is an unused slot, which is how numbering survives a
-   deletion. Any drift from datafile.pas garbles every record. */
+   deletion. Any drift from datafile.pas garbles every record.
+
+   Version 4 changes no record. It appends three self-describing sections
+   after the paragraph blob:
+
+     Uint16 nEvents                 // records that follow, NOT the highest
+                                    // slot: gaps are skipped, and each
+                                    // record carries its own slot number
+     repeat nEvents times:
+       Uint16 Size                  // bytes after this field
+       Uint16 Number                // the slot, 1..MAX_EVENTS
+       Uint8  NameLen + name
+       Uint8  TriggerType           // ordinal, never the enum itself
+       Uint16 TriggerID ; Uint16 TriggerID2
+       Uint8  Flags                 // bit 0 OneShot, bit 1 Enabled
+       Uint8  CondCount   ; repeat 6 bytes: type, Uint16 target,
+                                            Int16 value, negate
+       Uint8  ActionCount ; repeat: type, Uint16 target, Int16 value,
+                                    Uint8 textLen + text
+     Uint16 FlagNameCount    ; repeat Uint8 len + bytes
+     Uint16 CounterNameCount ; repeat Uint8 len + bytes
+
+   The event record is the one variable-length record in the format: a fixed
+   one would reserve MAX_ACTIONS x MAX_EVENT_TEXT per event, 764 bytes where
+   a realistic event uses under a hundred. The leading Size lets a reader
+   skip a record whose tail it does not understand, which is what makes this
+   file forward-compatible rather than merely versioned. */
 const BIN = { HEADER: 69, ROOM: 317, OBJECT: 246, MOB: 343 };
 const BIN_V2 = { ROOM: 315, OBJECT: 244, MOB: 341 };
+const EV_ONESHOT = 0x01, EV_ENABLED = 0x02;
+
+// Events are encoded to byte arrays first so the buffer can be sized exactly,
+// the same way the paragraph section already is.
+function encodeEvent(slot, e) {
+  const b = [];
+  const put16 = n => { b.push(n & 0xff, (n >> 8) & 0xff); };
+  const putStr = (s, max) => {
+    const bytes = latin1(s || "").slice(0, max);
+    b.push(bytes.length);
+    for (const c of bytes) b.push(c);
+  };
+  put16(slot);
+  putStr(e.name, LIM.EVENT_NAME);
+  b.push(trigOrd(e.trigger));
+  put16(e.triggerID | 0);
+  put16(e.triggerID2 | 0);
+  b.push((e.oneShot ? EV_ONESHOT : 0) | (e.enabled ? EV_ENABLED : 0));
+  const conds = (e.conds || []).slice(0, LIM.CONDITIONS);
+  b.push(conds.length);
+  for (const c of conds) {
+    b.push(condOrd(c.type));
+    put16(c.targetID | 0);
+    put16(c.value | 0);          // SmallInt: two's complement, same bytes
+    b.push(c.negate ? 1 : 0);
+  }
+  const acts = (e.actions || []).slice(0, LIM.ACTIONS);
+  b.push(acts.length);
+  for (const a of acts) {
+    b.push(actOrd(a.type));
+    put16(a.targetID | 0);
+    put16(a.value | 0);
+    putStr(a.text, LIM.EVENT_TEXT);
+  }
+  return b;
+}
+
+function decodeEvent(v, off, end) {
+  let p = off;
+  const u8 = () => v.getUint8(p++);
+  const u16 = () => { const n = v.getUint16(p, true); p += 2; return n; };
+  const i16 = () => { const n = v.getInt16(p, true); p += 2; return n; };
+  const str = () => {
+    const n = u8();
+    let s = "";
+    for (let i = 0; i < n; i++) s += String.fromCharCode(v.getUint8(p + i));
+    p += n;
+    return s;
+  };
+  const slot = u16();
+  const e = newEvent(str());
+  e.trigger = trigName(u8());
+  e.triggerID = u16();
+  e.triggerID2 = u16();
+  const fl = u8();
+  e.oneShot = !!(fl & EV_ONESHOT);
+  e.enabled = !!(fl & EV_ENABLED);
+  let n = u8();
+  for (let i = 0; i < n && p < end; i++) {
+    const c = newCond();
+    c.type = condName(u8());
+    c.targetID = u16();
+    c.value = i16();
+    c.negate = !!u8();
+    e.conds.push(c);
+  }
+  n = u8();
+  for (let i = 0; i < n && p < end; i++) {
+    const a = newAction();
+    a.type = actName(u8());
+    a.targetID = u16();
+    a.value = i16();
+    a.text = str();
+    e.actions.push(a);
+  }
+  return { slot, event: e };
+}
 
 function writeBinary() {
   const rooms = world.rooms, objects = world.objects, mobs = world.mobs;
@@ -523,15 +682,38 @@ function writeBinary() {
   for (let i = 1; i <= nPara; i++) paraBytes.push(latin1(world.paragraphs[i] || "").slice(0, LIM.PARA_LEN));
   const paraSize = 2 + paraBytes.reduce((s, b) => s + 2 + b.length, 0);
 
+  // Events, then the two name tables, on the same principle. Empty slots are
+  // skipped rather than written as a hole: each record carries its own slot
+  // number, so a gap costs nothing at all.
+  const evBytes = eventSlots().map(i => encodeEvent(i, world.events[i]));
+  // Uint16 count, then each record behind its own Uint16 size.
+  const evSize = 2 + evBytes.reduce((s, b) => s + 2 + b.length, 0);
+
+  const nameTable = (map, limit) => {
+    let hi = 0;
+    for (const k of Object.keys(map)) {
+      const i = k | 0;
+      if (map[k] && i >= 1 && i <= limit && i > hi) hi = i;
+    }
+    const rows = [];
+    for (let i = 1; i <= hi; i++)
+      rows.push(latin1(map[i] || "").slice(0, LIM.VAR_NAME));
+    return rows;
+  };
+  const flagRows = nameTable(world.flagNames, LIM.FLAGS);
+  const counterRows = nameTable(world.counterNames, LIM.COUNTERS);
+  const namesSize = 2 + flagRows.reduce((s, b) => s + 1 + b.length, 0) +
+                    2 + counterRows.reduce((s, b) => s + 1 + b.length, 0);
+
   const total = BIN.HEADER + rooms.length * BIN.ROOM + objects.length * BIN.OBJECT +
-                mobs.length * BIN.MOB + paraSize;
+                mobs.length * BIN.MOB + paraSize + evSize + namesSize;
   const buf = new ArrayBuffer(total);
   const v = new DataView(buf);
   let p = 0;
 
   // Header
   "SORB".split("").forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
-  v.setUint16(4, 3, true);                       // version
+  v.setUint16(4, 4, true);                       // version
   v.setUint16(6, rooms.length, true);
   v.setUint16(8, objects.length, true);
   v.setUint16(10, mobs.length, true);
@@ -592,6 +774,25 @@ function writeBinary() {
     for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
     p += bytes.length;
   }
+
+  // Version 4 sections. A world with no events costs 6 bytes.
+  v.setUint16(p, evBytes.length, true);
+  p += 2;
+  for (const bytes of evBytes) {
+    v.setUint16(p, bytes.length, true);
+    p += 2;
+    for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
+    p += bytes.length;
+  }
+  for (const rows of [flagRows, counterRows]) {
+    v.setUint16(p, rows.length, true);
+    p += 2;
+    for (const bytes of rows) {
+      v.setUint8(p++, bytes.length);
+      for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
+      p += bytes.length;
+    }
+  }
   return buf;
 }
 
@@ -600,7 +801,7 @@ function readBinary(buf, fileName) {
   const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
   if (magic !== "SORB") throw new Error("Not a Secret Orb binary world (missing SORB signature).");
   const version = v.getUint16(4, true);
-  if (version < 1 || version > 3) throw new Error("Unsupported binary version " + version + ".");
+  if (version < 1 || version > 4) throw new Error("Unsupported binary version " + version + ".");
 
   const w = blankWorld();
   const nRooms = v.getUint16(6, true), nObjects = v.getUint16(8, true), nMobs = v.getUint16(10, true);
@@ -675,6 +876,35 @@ function readBinary(buf, fileName) {
       p += len;
     }
   }
+
+  if (version >= 4 && p + 2 <= buf.byteLength) {
+    const n = Math.min(v.getUint16(p, true), LIM.EVENTS);
+    p += 2;
+    for (let i = 0; i < n && p + 2 <= buf.byteLength; i++) {
+      const size = v.getUint16(p, true);
+      p += 2;
+      if (p + size > buf.byteLength) break;     // truncated, keep what we have
+      // Read within this record's own bounds and then step by size, so a
+      // record with a tail we do not understand is skipped rather than
+      // desynchronising everything after it.
+      const { slot, event } = decodeEvent(v, p, p + size);
+      if (slot >= 1 && slot <= LIM.EVENTS) w.events[slot] = event;
+      p += size;
+    }
+    for (const [map, limit] of [[w.flagNames, LIM.FLAGS], [w.counterNames, LIM.COUNTERS]]) {
+      if (p + 2 > buf.byteLength) break;
+      const rows = Math.min(v.getUint16(p, true), limit);
+      p += 2;
+      for (let i = 1; i <= rows && p < buf.byteLength; i++) {
+        const len = v.getUint8(p++);
+        if (p + len > buf.byteLength) break;
+        let s = "";
+        for (let k = 0; k < len; k++) s += String.fromCharCode(v.getUint8(p + k));
+        p += len;
+        if (s) map[i] = s;
+      }
+    }
+  }
   return w;
 }
 
@@ -696,6 +926,10 @@ function writeText() {
   L.push("WINPARA=" + (world.winPara | 0));
   L.push("LOSEPARA=" + (world.losePara | 0));
   L.push("BOOKLET=" + (bookletMode() ? 1 : 0));
+  for (const [map, limit, key] of [[world.flagNames, LIM.FLAGS, "FLAG"],
+                                   [world.counterNames, LIM.COUNTERS, "COUNTER"]])
+    for (let i = 1; i <= limit; i++)
+      if (map[i]) L.push(key + "=" + i + "," + oneLine(map[i]));
   L.push("");
   for (const r of world.rooms) {
     L.push("[ROOM:" + r.id + "]");
@@ -727,6 +961,28 @@ function writeText() {
     L.push("FIRSTTALK=" + (m.firstTalkPara | 0));
     L.push("");
   }
+  // COND and ACTION repeat and accumulate where every other key assigns, so
+  // the order here is the order they run in. The number in the header is the
+  // slot, not a running index.
+  for (const n of eventSlots()) {
+    const e = world.events[n];
+    L.push("[EVENT:" + n + "]");
+    L.push("NAME=" + oneLine(e.name));
+    L.push("TRIGGER=" + e.trigger);
+    L.push("TRIGGERID=" + (e.triggerID | 0));
+    L.push("TRIGGERID2=" + (e.triggerID2 | 0));
+    L.push("ONESHOT=" + (e.oneShot ? 1 : 0));
+    L.push("ENABLED=" + (e.enabled ? 1 : 0));
+    for (const c of e.conds)
+      L.push("COND=" + c.type + "," + (c.targetID | 0) + "," + (c.value | 0) +
+             "," + (c.negate ? 1 : 0));
+    // The message takes everything after the third comma verbatim, so it may
+    // contain commas.
+    for (const a of e.actions)
+      L.push("ACTION=" + a.type + "," + (a.targetID | 0) + "," + (a.value | 0) +
+             "," + oneLine(a.text));
+    L.push("");
+  }
   // Paragraph bodies are literal text rather than key=value, so they keep
   // their line breaks. Only a real section header ends one.
   for (const n of paraNumbers()) {
@@ -739,7 +995,21 @@ function writeText() {
 
 // Only real section headers end a paragraph body; a body line may itself
 // start with a bracket. Mirrors IsSectionHeader in datafile.pas.
-const SECTION_RE = /^\[(WORLD\]|ROOM:|OBJECT:|MOB:|PARAGRAPH:)/i;
+const SECTION_RE = /^\[(WORLD\]|ROOM:|OBJECT:|MOB:|PARAGRAPH:|EVENT:)/i;
+
+// "SHOWMESSAGE,0,0,It is, in fact, a trap." - the last field takes everything
+// after the third comma, so a message may contain commas.
+function splitFields(val, n) {
+  const out = [];
+  let rest = val;
+  for (let i = 0; i < n - 1; i++) {
+    const c = rest.indexOf(",");
+    if (c < 0) { out.push(rest); rest = ""; }
+    else { out.push(rest.slice(0, c)); rest = rest.slice(c + 1); }
+  }
+  out.push(rest);
+  return out;
+}
 
 function readText(src) {
   const w = blankWorld();
@@ -774,6 +1044,13 @@ function readText(src) {
       else if (kind === "ROOM") { section = "room"; cur = newRoom(id || w.rooms.length + 1); w.rooms.push(cur); }
       else if (kind === "OBJECT") { section = "object"; cur = newObject(id || w.objects.length + 1); w.objects.push(cur); }
       else if (kind === "MOB") { section = "mob"; cur = newMob(id || w.mobs.length + 1); w.mobs.push(cur); }
+      else if (kind === "EVENT") {
+        // The header carries the slot, which is identity: a save game's
+        // bitmaps are indexed by it, so it must not shift.
+        section = "event";
+        cur = newEvent();
+        if (id >= 1 && id <= LIM.EVENTS) w.events[id] = cur; else cur = null;
+      }
       else if (kind === "PARAGRAPH") {
         section = "paragraph"; cur = null;
         paraNum = (id >= 1 && id <= LIM.PARAGRAPHS) ? id : 0;
@@ -796,6 +1073,36 @@ function readText(src) {
       else if (key === "WINPARA") w.winPara = num;
       else if (key === "LOSEPARA") w.losePara = num;
       else if (key === "BOOKLET") w.worldFlags = num ? (w.worldFlags | WF_BOOKLET) : (w.worldFlags & ~WF_BOOKLET);
+      else if (key === "FLAG" || key === "COUNTER") {
+        const [n, nm] = splitFields(val, 2);
+        const i = parseInt(n, 10) || 0;
+        const map = key === "FLAG" ? w.flagNames : w.counterNames;
+        const limit = key === "FLAG" ? LIM.FLAGS : LIM.COUNTERS;
+        if (i >= 1 && i <= limit) map[i] = nm.trim().slice(0, LIM.VAR_NAME);
+      }
+    } else if (section === "event" && cur) {
+      if (key === "NAME") cur.name = val.slice(0, LIM.EVENT_NAME);
+      else if (key === "TRIGGER") cur.trigger = trigName(trigOrd(val));
+      else if (key === "TRIGGERID") cur.triggerID = num;
+      else if (key === "TRIGGERID2") cur.triggerID2 = num;
+      else if (key === "ONESHOT") cur.oneShot = !!num;
+      else if (key === "ENABLED") cur.enabled = !!num;
+      else if (key === "COND") {
+        const [t, tgt, va, neg] = splitFields(val, 4);
+        if (cur.conds.length < LIM.CONDITIONS)
+          cur.conds.push({ type: condName(condOrd(t.trim())),
+                           targetID: parseInt(tgt, 10) || 0,
+                           value: parseInt(va, 10) || 0,
+                           negate: !!(parseInt(neg, 10) || 0) });
+      }
+      else if (key === "ACTION") {
+        const [t, tgt, va, txt] = splitFields(val, 4);
+        if (cur.actions.length < LIM.ACTIONS)
+          cur.actions.push({ type: actName(actOrd(t.trim())),
+                             targetID: parseInt(tgt, 10) || 0,
+                             value: parseInt(va, 10) || 0,
+                             text: txt.slice(0, LIM.EVENT_TEXT) });
+      }
     } else if (section === "room" && cur) {
       if (key === "NAME") cur.name = val;
       else if (key === "DESC") cur.desc = val;
@@ -851,18 +1158,22 @@ function writeBPL() {
   L.push("# Generated by the Secret Orb web editor");
   L.push("");
   L.push("{START:WORLD}");
-  L.push("{REVISION:3}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
+  L.push("{REVISION:4}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
   if (world.winRoomID > 0 || world.winObjectID > 0)
     L.push("{WINROOM:" + (world.winRoomID | 0) + "}{WINOBJ:" + (world.winObjectID | 0) + "}");
   if (world.introPara > 0 || world.winPara > 0 || world.losePara > 0)
     L.push("{INTRO:" + (world.introPara | 0) + "}{WINPARA:" + (world.winPara | 0) +
            "}{LOSEPARA:" + (world.losePara | 0) + "}");
   if (bookletMode()) L.push("{BOOKLET:1}");
+  for (const [map, limit, key] of [[world.flagNames, LIM.FLAGS, "FLAGNAME"],
+                                   [world.counterNames, LIM.COUNTERS, "COUNTERNAME"]])
+    for (let i = 1; i <= limit; i++)
+      if (map[i]) L.push("{" + key + ":" + i + "," + bplSafe(map[i]) + "}");
   L.push("{END}");
   L.push("");
   for (const r of world.rooms) {
     L.push("{START:ROOM}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + r.id + "}{VAR:R" + r.id + "}{NAME:" + bplSafe(r.name) + "}+++");
     L.push("{DESC:" + bplSafe(r.desc) + "}+++");
     L.push(DIRS.map(d => "{" + d.toUpperCase() + ":" + (r.exits[d] | 0) + "}").join(""));
@@ -873,7 +1184,7 @@ function writeBPL() {
   }
   for (const o of world.objects) {
     L.push("{START:OBJECT}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + o.id + "}{VAR:O" + o.id + "}{NAME:" + bplSafe(o.name) + "}+++");
     L.push("{DESC:" + bplSafe(o.desc) + "}+++");
     let line = "{ROOM:" + (o.roomID | 0) + "}";
@@ -889,7 +1200,7 @@ function writeBPL() {
   }
   for (const m of world.mobs) {
     L.push("{START:MOB}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + m.id + "}{VAR:M" + m.id + "}{NAME:" + bplSafe(m.name) + "}+++");
     L.push("{DESC:" + bplSafe(m.desc) + "}+++");
     L.push("{ROOM:" + (m.roomID | 0) + "}");
@@ -901,9 +1212,29 @@ function writeBPL() {
   // OC is the booklet number, so gaps are preserved.
   for (const n of paraNumbers()) {
     L.push("{START:PARAGRAPH}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + n + "}");
     L.push("{TEXT:" + bplEncodePara(world.paragraphs[n]) + "}");
+    L.push("{END}");
+    L.push("");
+  }
+  // Here OC is the event slot rather than a running index, for a stronger
+  // reason than booklet numbering: save games index their Fired bitmap by it.
+  // COND and ACTION accumulate where every other BPL tag assigns.
+  for (const n of eventSlots()) {
+    const e = world.events[n];
+    L.push("{START:EVENT}");
+    L.push("{REVISION:4}");
+    L.push("{OC:" + n + "}{NAME:" + bplSafe(e.name) + "}+++");
+    let line = "{TRIGGER:" + e.trigger + "}{TRIGGERID:" + (e.triggerID | 0) + "}";
+    if (e.triggerID2 > 0) line += "{TRIGGERID2:" + e.triggerID2 + "}";
+    L.push(line + "{ONESHOT:" + (e.oneShot ? 1 : 0) + "}{ENABLED:" + (e.enabled ? 1 : 0) + "}");
+    for (const c of e.conds)
+      L.push("{COND:" + c.type + "," + (c.targetID | 0) + "," + (c.value | 0) +
+             "," + (c.negate ? 1 : 0) + "}");
+    for (const a of e.actions)
+      L.push("{ACTION:" + a.type + "," + (a.targetID | 0) + "," + (a.value | 0) +
+             "," + bplSafe(a.text) + "}");
     L.push("{END}");
     L.push("");
   }
@@ -912,7 +1243,7 @@ function writeBPL() {
 
 function readBPL(src) {
   const w = blankWorld();
-  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB", "PARAGRAPH"];
+  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB", "PARAGRAPH", "EVENT"];
   let full = "", inBlock = false, type = "", t = null;
 
   const flush = () => {
@@ -947,6 +1278,31 @@ function readBPL(src) {
       const n = t.oc | 0;
       if (n >= 1 && n <= LIM.PARAGRAPHS && t.TEXT)
         w.paragraphs[n] = bplDecodePara(t.TEXT).slice(0, LIM.PARA_LEN);
+    } else if (type === "EVENT") {
+      const n = t.oc | 0;
+      if (n >= 1 && n <= LIM.EVENTS) {
+        const e = newEvent((t.NAME || "").slice(0, LIM.EVENT_NAME));
+        e.trigger = trigName(trigOrd(t.TRIGGER || "ENTERROOM"));
+        e.triggerID = parseInt(t.TRIGGERID || "0", 10) || 0;
+        e.triggerID2 = parseInt(t.TRIGGERID2 || "0", 10) || 0;
+        e.oneShot = (parseInt(t.ONESHOT === undefined ? "1" : t.ONESHOT, 10) || 0) !== 0;
+        e.enabled = (parseInt(t.ENABLED === undefined ? "1" : t.ENABLED, 10) || 0) !== 0;
+        for (const raw of (t.CONDS || []).slice(0, LIM.CONDITIONS)) {
+          const [ty, tgt, va, neg] = splitFields(raw, 4);
+          e.conds.push({ type: condName(condOrd(ty.trim())),
+                         targetID: parseInt(tgt, 10) || 0,
+                         value: parseInt(va, 10) || 0,
+                         negate: !!(parseInt(neg, 10) || 0) });
+        }
+        for (const raw of (t.ACTIONS || []).slice(0, LIM.ACTIONS)) {
+          const [ty, tgt, va, txt] = splitFields(raw, 4);
+          e.actions.push({ type: actName(actOrd(ty.trim())),
+                           targetID: parseInt(tgt, 10) || 0,
+                           value: parseInt(va, 10) || 0,
+                           text: txt.slice(0, LIM.EVENT_TEXT) });
+        }
+        w.events[n] = e;
+      }
     }
     inBlock = false; type = ""; t = null;
   };
@@ -976,6 +1332,16 @@ function readBPL(src) {
       else if (key === "WINPARA") w.winPara = parseInt(val, 10) || 0;
       else if (key === "LOSEPARA") w.losePara = parseInt(val, 10) || 0;
       else if (key === "BOOKLET") w.worldFlags = (parseInt(val, 10) || 0) ? (w.worldFlags | WF_BOOKLET) : (w.worldFlags & ~WF_BOOKLET);
+      else if (key === "FLAGNAME" || key === "COUNTERNAME") {
+        const [n, nm] = splitFields(val, 2);
+        const i = parseInt(n, 10) || 0;
+        const map = key === "FLAGNAME" ? w.flagNames : w.counterNames;
+        const limit = key === "FLAGNAME" ? LIM.FLAGS : LIM.COUNTERS;
+        if (i >= 1 && i <= limit) map[i] = nm.trim().slice(0, LIM.VAR_NAME);
+      }
+      // The only two tags that accumulate; everything else assigns.
+      else if (key === "COND") (t.CONDS = t.CONDS || []).push(val);
+      else if (key === "ACTION") (t.ACTIONS = t.ACTIONS || []).push(val);
       else if (key === "DESCRIPTION") t.DESC = val;
       else t[key] = val;
     }
@@ -1129,6 +1495,145 @@ function validate() {
   const takeable = world.objects.filter(o => o.flags.pickup).length;
   if (takeable > LIM.INVENTORY)
     warn("There are " + takeable + " takeable objects but the player can only carry " + LIM.INVENTORY + " at a time.", "world");
+
+  // Events. Everything an event names is a number, and a number that names
+  // nothing is invisible at run time: FireEvents skips a trigger that never
+  // matches and RunActions skips an action whose target is not there, both
+  // without a word. Mirrors CheckEvents in worldval.pas - the rules follow
+  // the interpreter in events.pas, so the three have to be read together.
+  const hi = eventCount();
+  const needRoom = (id, what, where) => { if (!roomById(id)) err(what + " names room " + id + ", which does not exist.", where); };
+  const needObj = (id, what, where) => { if (!objectById(id)) err(what + " names object " + id + ", which does not exist.", where); };
+  const needMob = (id, what, where) => { if (!mobById(id)) err(what + " names mob " + id + ", which does not exist.", where); };
+  const needFlag = (id, what, where) => { if (!(id >= 1 && id <= LIM.FLAGS)) err(what + " names flag " + id + "; flags run 1 to " + LIM.FLAGS + ".", where); };
+  const needCounter = (id, what, where) => { if (!(id >= 1 && id <= LIM.COUNTERS)) err(what + " names counter " + id + "; counters run 1 to " + LIM.COUNTERS + ".", where); };
+
+  // Does any action anywhere write this flag? An etFlagSet trigger waiting
+  // on a flag nothing sets is the event equivalent of an unreachable room.
+  const writesFlag = (n, want) => eventSlots().some(s =>
+    world.events[s].actions.some(a => (a.targetID | 0) === n &&
+      (a.type === "TOGGLEFLAG" || a.type === (want ? "SETFLAG" : "CLEARFLAG"))));
+  const enablesEvent = n => eventSlots().some(s =>
+    world.events[s].actions.some(a => a.type === "ENABLEEVENT" && (a.targetID | 0) === n));
+
+  for (const s of eventSlots()) {
+    const e = world.events[s], where = "event " + s;
+    // FireEvents walks slots 1..EventCount and stops there.
+    if (s > hi) err("Event is above the event count of " + hi + ", so it never fires.", where);
+    if (!e.name) warn("Event has no name, which makes it hard to find.", where);
+    if (!e.enabled && !enablesEvent(s)) warn("Event starts disabled and nothing enables it.", where);
+
+    // A TriggerID of 0 means "any" and is not a missing reference. A
+    // TriggerID2 set on a trigger whose hook always passes 0 can never
+    // match, so the event is dead rather than merely narrow.
+    const noSecond = () => {
+      if (e.triggerID2 | 0)
+        err("Trigger " + e.trigger + " has no second ID, so this event never fires.", where);
+    };
+    const id1 = e.triggerID | 0, id2 = e.triggerID2 | 0;
+    switch (e.trigger) {
+      case "ENTERROOM": case "FIRSTVISIT":
+        if (id1) needRoom(id1, "Trigger", where); noSecond(); break;
+      case "EXITROOM":
+        // The only trigger with two rooms: the one being left and the one
+        // being entered.
+        if (id1) needRoom(id1, "Trigger", where);
+        if (id2) needRoom(id2, "Trigger destination", where);
+        break;
+      case "TAKEOBJECT": case "DROPOBJECT": case "USEOBJECT": case "EXAMINEOBJECT":
+        if (id1) needObj(id1, "Trigger", where); noSecond(); break;
+      case "USEOBJECTON":
+        // Both sides are objects. Handing something to a person is GIVE,
+        // which has its own trigger.
+        if (id1) needObj(id1, "Trigger", where);
+        if (id2) needObj(id2, "Trigger target", where);
+        break;
+      case "TALKTOMOB":
+        if (id1) needMob(id1, "Trigger", where); noSecond(); break;
+      case "GIVETO":
+        if (id1) needObj(id1, "Trigger", where);
+        if (id2) needMob(id2, "Trigger recipient", where);
+        break;
+      case "TIMER":
+        // The hook runs after the turn counter is incremented, so turn 0
+        // never arrives; with no repeat period either, it waits forever.
+        if (!id1 && !id2) err("Timer fires at turn 0 and never repeats, so it never fires.", where);
+        break;
+      case "FLAGSET": case "FLAGCLEAR":
+        if (id1) {
+          needFlag(id1, "Trigger", where);
+          if (id1 <= LIM.FLAGS && !writesFlag(id1, e.trigger === "FLAGSET"))
+            warn("Waits on flag " + id1 + ", which no action ever writes.", where);
+        }
+        noSecond();
+        break;
+    }
+
+    e.conds.forEach((c, i) => {
+      const what = "Condition " + (i + 1), tgt = c.targetID | 0, val = c.value | 0;
+      switch (c.type) {
+        case "NONE": warn(what + " is empty and always passes.", where); break;
+        case "HASOBJECT": needObj(tgt, what, where); break;
+        case "OBJECTINROOM": needObj(tgt, what, where); needRoom(val, what + " room", where); break;
+        case "MOBINROOM": needMob(tgt, what, where); needRoom(val, what + " room", where); break;
+        case "FLAGISSET": case "FLAGISCLEAR": needFlag(tgt, what, where); break;
+        case "COUNTEREQUALS": case "COUNTERGREATER": case "COUNTERLESS":
+          needCounter(tgt, what, where); break;
+        case "VISITEDROOM": case "ROOMIS": needRoom(tgt, what, where); break;
+      }
+    });
+
+    if (!e.actions.length) warn("Event has no actions, so firing it does nothing.", where);
+    e.actions.forEach((a, i) => {
+      const what = "Action " + (i + 1), tgt = a.targetID | 0, val = a.value | 0;
+      switch (a.type) {
+        case "NONE": warn(what + " is empty and does nothing.", where); break;
+        case "SHOWMESSAGE": if (!a.text) err(what + " shows an empty message.", where); break;
+        case "SHOWPARAGRAPH":
+          if (!tgt) err(what + " shows paragraph 0, which is no paragraph at all.", where);
+          else paraRef(tgt, what, where);
+          break;
+        case "SETFLAG": case "CLEARFLAG": case "TOGGLEFLAG": needFlag(tgt, what, where); break;
+        case "SETCOUNTER": case "ADDCOUNTER": case "SUBCOUNTER": needCounter(tgt, what, where); break;
+        case "MOVEOBJECT": case "SPAWNOBJECT":
+          needObj(tgt, what, where);
+          // Room 0 is what REMOVEOBJECT is for, and is more likely a
+          // forgotten field than a deliberate disappearance.
+          if (!val) warn(what + " moves the object to room 0, taking it out of play.", where);
+          else needRoom(val, what + " destination", where);
+          break;
+        case "REMOVEOBJECT": needObj(tgt, what, where); break;
+        case "MOVEMOB":
+          needMob(tgt, what, where);
+          if (!val) warn(what + " moves the mob to room 0, taking it out of play.", where);
+          else needRoom(val, what + " destination", where);
+          break;
+        case "REMOVEMOB": needMob(tgt, what, where); break;
+        case "LOCKEXIT": case "UNLOCKEXIT": {
+          needRoom(tgt, what, where);
+          // The direction is the low three bits of Value, so it can hold a
+          // number no direction answers to. The engine clamps that to north
+          // rather than crashing - silently locking the wrong door.
+          const d = val & 7;
+          if (d >= DIRS.length) err(what + " has direction " + d + ", which is not a direction.", where);
+          else if (a.type === "UNLOCKEXIT") {
+            const dest = (val >> 3) & 0x1fff;
+            if (!dest) err(what + " opens the " + DIR_LABEL[DIRS[d]] + " exit onto nothing.", where);
+            else needRoom(dest, what + " destination", where);
+          }
+          break;
+        }
+        case "TELEPORTPLAYER": needRoom(tgt, what, where); break;
+        case "ADDSCORE": if (!tgt) warn(what + " awards 0 points.", where); break;
+        case "ENABLEEVENT": case "DISABLEEVENT":
+          if (!(tgt >= 1 && tgt <= LIM.EVENTS))
+            err(what + " names event " + tgt + "; events run 1 to " + LIM.EVENTS + ".", where);
+          else if (!world.events[tgt])
+            err(what + " names event " + tgt + ", which is an empty slot.", where);
+          break;
+      }
+    });
+  }
 
   return out;
 }
@@ -1974,6 +2479,17 @@ function paraTriggers(n) {
   for (const m of world.mobs)
     if ((m.firstTalkPara | 0) === n)
       out.push('first talk with mob ' + m.id + ' "' + (m.name || "unnamed") + '"');
+  // The seventh route to a paragraph and the only one that is not a field on
+  // an entity: an event's SHOWPARAGRAPH action. Without this every
+  // event-fired paragraph is reported as an orphan, and "fired by: NOTHING"
+  // is the one line in this report an author acts on. Mirrors
+  // DescribeTriggers in worldval.pas.
+  for (const s of eventSlots())
+    world.events[s].actions.forEach((a, i) => {
+      if (a.type === "SHOWPARAGRAPH" && (a.targetID | 0) === n)
+        out.push('event ' + s + ' "' + (world.events[s].name || "unnamed") +
+                 '", action ' + (i + 1) + " (" + world.events[s].trigger + ")");
+    });
   return out;
 }
 
@@ -1992,6 +2508,11 @@ function danglingParaRefs() {
   for (const r of world.rooms) check(r.firstVisitPara, "Room " + r.id + " first visit");
   for (const o of world.objects) check(o.firstTakePara, "Object " + o.id + " first take");
   for (const m of world.mobs) check(m.firstTalkPara, "Mob " + m.id + " first talk");
+  for (const s of eventSlots())
+    world.events[s].actions.forEach((a, i) => {
+      if (a.type === "SHOWPARAGRAPH")
+        check(a.targetID, "Event " + s + " action " + (i + 1));
+    });
   return out;
 }
 

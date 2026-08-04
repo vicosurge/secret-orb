@@ -13,6 +13,13 @@ DATADIR = data
 # -Xs: Strip symbols
 FPCFLAGS = -O2 -XX -CX -Xs -Fu$(SRCDIR)
 
+# The tools and tests keep their intermediates out of bin/, which is also a
+# unit search path. tools/validate.pas would otherwise leave a validate.o
+# there, and Turbo Vision has a unit of that name: build the tools and then
+# editor-tv and the linker finds ours instead of Free Pascal's, with an
+# undefined reference to TValidator.Valid that says nothing about the cause.
+TOOLFLAGS = $(FPCFLAGS) -FU$(BINDIR)/obj
+
 # Target-specific flags
 DOS_FLAGS = -Twin16 -WD
 WIN32_FLAGS = -Twin32
@@ -33,7 +40,7 @@ CWSDPMI  = $(DOSTOOLS)/share/cwsdpmi
 DOS32_FLAGS = -O2 -XX -CX -Xs -Fu$(SRCDIR) -FU$(DOSDIR)/units
 
 .PHONY: all clean native dos dos32 win32 release editors editor-tv \
-        converter tools test sizecheck \
+        converter tools test webtest sizecheck \
         dos-toolchain dos-dist dos-test dos-clean
 
 all: native
@@ -49,26 +56,52 @@ native: $(BINDIR)
 
 # Converter tool
 converter: $(BINDIR)
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/converter tools/converter.pas
+	@mkdir -p $(BINDIR)/obj
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/converter tools/converter.pas
 
 # Development tools. None of these ship: worldval.pas is editor-side only and
 # must never be linked into the game.
 tools: $(BINDIR)
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/converter tools/converter.pas
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/validate tools/validate.pas
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/bpldump tools/bpldump.pas
+	@mkdir -p $(BINDIR)/obj
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/converter tools/converter.pas
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/validate tools/validate.pas
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/bpldump tools/bpldump.pas
 
 # Unit tests. They write their scratch files into the working directory and
 # delete them again, so they need no fixtures. pairtest and eventtest also
 # run under FreeDOS; parsetest does not, because it links GameCore and so
 # pulls in Crt, which on DOS writes to video memory rather than to a pipe.
 test: $(BINDIR)
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/pairtest tools/pairtest.pas
+	@mkdir -p $(BINDIR)/obj
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/pairtest tools/pairtest.pas
 	$(BINDIR)/pairtest
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/eventtest tools/eventtest.pas
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/eventtest tools/eventtest.pas
 	$(BINDIR)/eventtest
-	$(FPC) $(FPCFLAGS) -o$(BINDIR)/parsetest tools/parsetest.pas
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/parsetest tools/parsetest.pas
 	$(BINDIR)/parsetest
+	@$(MAKE) --no-print-directory webtest
+
+# web/editor.html has no build step and no test framework, so its binary
+# writer has nothing checking it - and the byte layout beside writeBinary is a
+# contract with the packed records in datafile.pas. This round-trips a world
+# through all three formats in the page's own code, then makes the Pascal
+# reader agree: validate must accept the file, and the converter must rewrite
+# it byte for byte. Node is a test-only dependency; the editor, the game and
+# the distribution need nothing but a browser and FPC.
+webtest: $(BINDIR)
+	@command -v node >/dev/null 2>&1 || { \
+	  echo "SKIPPED: webtest needs node, which is not installed."; \
+	  echo "         web/editor.html's file layer is going unchecked."; \
+	  exit 0; }
+	@mkdir -p $(BINDIR)/obj
+	node tools/webformat.js $(BINDIR)/webworld.dat
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/validate tools/validate.pas
+	$(BINDIR)/validate $(BINDIR)/webworld.dat
+	$(FPC) $(TOOLFLAGS) -o$(BINDIR)/converter tools/converter.pas
+	$(BINDIR)/converter $(BINDIR)/webworld.dat $(BINDIR)/webworld2.dat
+	cmp $(BINDIR)/webworld.dat $(BINDIR)/webworld2.dat
+	@echo "webtest: the Pascal reader agrees with the web writer, byte for byte"
+	@rm -f $(BINDIR)/webworld.dat $(BINDIR)/webworld2.dat
 
 # Turbo Vision editor (for game creators, not part of player distribution)
 editor-tv: $(BINDIR)
