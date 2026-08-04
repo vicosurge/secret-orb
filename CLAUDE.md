@@ -585,8 +585,12 @@ for binary v4 must stay in step with the packed records in `datafile.pas` — th
 record sizes and field offsets are written down in comments next to its
 `writeBinary` function, and any drift garbles every record. It also carries a browser
 copy of the engine's command handling for playtesting, which mirrors `gamecore.pas`
-(including `showParagraph`, the browser twin of `ShowParagraph`), plus a Story tab
-and a printable HTML booklet export.
+(including `showParagraph`, the browser twin of `ShowParagraph`, and `fireEvents`,
+the twin of `FireEvents` — bounded the same four ways, so a world that misbehaves
+in one misbehaves in the other), plus Story and Events tabs and a printable HTML
+booklet export. The playtest keeps its own copy of the room exits for the same
+reason save version 3 stores them: `LOCKEXIT` makes them mutable, and a test run
+must not edit the author's world.
 
 Because the page has no build step and no test framework, that contract is
 checked from outside it: `pascal/tools/webformat.js` pulls the model and format
@@ -607,6 +611,11 @@ The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provid
 - A Story menu with a `PMemo`-based paragraph editor and booklet export. This is the
   only place the `Editors` unit is used; `editor-tv` is excluded from the `dos32`,
   `dos` and `win32` targets, so that dependency never reaches those builds.
+- An Events menu. A Turbo Vision dialog cannot relabel itself, so the type is
+  chosen first from a picker and the dialog is then *built* for that type,
+  asking only for the fields it uses. `PickIndex` is the one picker all three
+  enums share. Note that its parameter is `Preselect`, not `Current`:
+  `TGroup` has a field of that name and it wins inside a `with Dialog^` block
 
 The lightweight `editor.pas` edits a paragraph as a `MAX_PARA_LINES` × 74 grid of
 `ReadLine` calls joined with `#13#10`, because it has no multi-line control. All
@@ -622,6 +631,26 @@ the Pascal side and by equivalent functions in `web/editor.html`:
 | Validate world | `V` on the main menu | World ▸ Validate | Check tab |
 | Auto-connect exits | prompt on F2-save of a room | prompt on room OK | *Link back* button |
 | Paragraph cross-reference | `R` in the paragraph list | Story ▸ Export cross-reference | *Cross-ref* button |
+| Event authoring | **read-only list**, `E` on the main menu | Events ▸ List / Add | Events tab |
+
+Event authoring is the one row where the three editors deliberately differ.
+`editor.pas` ships on the 720KB floppy beside the game, and a condition and
+action list needs more screen and more control than a 25-row `Crt` form has —
+so there it is a **read-only list with delete and an enable toggle**, which is
+what an author needs while playing with a world on a DOS box: see what exists,
+turn one off to bisect a world that misbehaves, remove one. Writing them is
+`editor-tv.pas` and `web/editor.html`, neither of which has a size budget.
+
+What that authoring UI is really for is keeping an author from having to know
+the encodings. Which of a trigger's two IDs means what changes with the
+trigger, and `atLockExit` packs a direction and a destination into one
+`SmallInt`. Both editors label their fields from the type in hand — "Object
+ID", "Flag number", a direction picker — and the web editor goes further and
+makes every entity reference a picker, so a reference that does not exist is a
+thing you cannot type rather than something the Check tab tells you about
+later. Where a trigger's second ID is one the engine always passes as 0, the
+field is hidden rather than shown empty: filling it in would make the event
+dead.
 
 The cross-reference is **a separate file from the booklet, deliberately**. The
 booklet is what the player is handed; a list of what fires each paragraph would

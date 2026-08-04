@@ -45,6 +45,17 @@ const
   cmExportBooklet = 604;
   cmExportXRef    = 605;
 
+  cmListEvents    = 700;
+  cmAddEvent      = 701;
+  cmEditEvent     = 702;
+  cmDeleteEvent   = 703;
+  cmEvTrigger     = 704;
+  cmEvConds       = 705;
+  cmEvActs        = 706;
+  cmEvItemAdd     = 707;
+  cmEvItemEdit    = 708;
+  cmEvItemDel     = 709;
+
 type
   { Main application class }
   TEditorApp = object(TApplication)
@@ -90,6 +101,17 @@ type
     procedure EditParagraphByNumber(Num: Integer);
     procedure ExportBooklet;
     procedure ExportXRef;
+
+    { Event operations. The full authoring side, unlike editor.pas, which
+      ships on the floppy and gets a read-only list. }
+    procedure ListEvents;
+    procedure AddEvent;
+    procedure EditEventBySlot(Slot: Integer);
+    procedure EditEventList(var E: TWorldEvent; IsCond: Boolean);
+    function EditOneCondition(var C: TCondition): Boolean;
+    function EditOneAction(var A: TAction): Boolean;
+    function PickIndex(const Title: string; Items: PStringCollection;
+                       Preselect: Integer): Integer;
 
     { World operations }
     procedure WorldSettings;
@@ -186,13 +208,17 @@ begin
       NewItem('Export ~C~ross-reference...', '', kbNoKey, cmExportXRef,
               hcNoContext,
       nil )))))),
+    NewSubMenu('~E~vents', hcNoContext, NewMenu(
+      NewItem('~L~ist Events', '', kbNoKey, cmListEvents, hcNoContext,
+      NewItem('~A~dd Event', '', kbNoKey, cmAddEvent, hcNoContext,
+      nil))),
     NewSubMenu('~W~orld', hcNoContext, NewMenu(
       NewItem('~S~ettings...', '', kbNoKey, cmWorldSettings, hcNoContext,
       NewItem('~V~alidate...', '', kbNoKey, cmValidate, hcNoContext,
       NewLine(
       NewItem('~A~bout...', '', kbNoKey, cmAbout, hcNoContext,
       nil))))),
-    nil)))))))));
+    nil))))))))));
 end;
 
 procedure TEditorApp.HandleEvent(var Event: TEvent);
@@ -221,6 +247,9 @@ begin
       cmAddPara:       AddParagraph;
       cmExportBooklet: ExportBooklet;
       cmExportXRef:    ExportXRef;
+
+      cmListEvents:    ListEvents;
+      cmAddEvent:      AddEvent;
 
       cmWorldSettings: WorldSettings;
       cmValidate:      ValidateWorldDlg;
@@ -2150,6 +2179,908 @@ begin
   end;
 
   Dispose(Dialog, Done);
+end;
+
+{ ---- Events -------------------------------------------------------------
+
+  The full authoring side lives here and in the browser editor, because
+  neither has a size budget - editor.pas ships on the floppy beside the game
+  and gets a read-only list. What all this code is really for is keeping an
+  author from having to know the encodings: which of a trigger's two IDs
+  means what, and that a locked exit packs a direction and a destination into
+  one number. The labels come from the type in hand, so the dialog asks for
+  "Object ID" or "Flag number" rather than "Target". }
+
+{ The human half of the pick lists. The enum spellings are file format and
+  must not change; these can. }
+{ Format has no conditional, and an if-else around every row would bury what
+  the row says. }
+function BoolText(B: Boolean; const WhenTrue, WhenFalse: string): string;
+begin
+  if B then BoolText := WhenTrue else BoolText := WhenFalse;
+end;
+
+function TriggerHelp(T: TEventTrigger): string;
+begin
+  case T of
+    etEnterRoom:     TriggerHelp := 'player enters a room';
+    etExitRoom:      TriggerHelp := 'player leaves a room';
+    etFirstVisit:    TriggerHelp := 'player''s first visit to a room';
+    etTakeObject:    TriggerHelp := 'player takes an object';
+    etDropObject:    TriggerHelp := 'player drops an object';
+    etUseObject:     TriggerHelp := 'player uses an object';
+    etUseObjectOn:   TriggerHelp := 'player uses one thing on another';
+    etExamineObject: TriggerHelp := 'player examines an object';
+    etTalkToMob:     TriggerHelp := 'player talks to a mob';
+    etGiveTo:        TriggerHelp := 'player gives something to a mob';
+    etTimer:         TriggerHelp := 'a number of turns have passed';
+    etFlagSet:       TriggerHelp := 'a flag becomes set';
+    etFlagClear:     TriggerHelp := 'a flag becomes clear';
+  else
+    TriggerHelp := '';
+  end;
+end;
+
+{ What a trigger's first and second ID mean. An empty second label means the
+  engine always passes 0 there, so the field is hidden - filling it in would
+  make the event dead, which is what the validator reports. }
+function TriggerLabel1(T: TEventTrigger): string;
+begin
+  case T of
+    etEnterRoom:     TriggerLabel1 := 'Room entered:';
+    etExitRoom:      TriggerLabel1 := 'Room left:';
+    etFirstVisit:    TriggerLabel1 := 'Room:';
+    etTakeObject:    TriggerLabel1 := 'Object taken:';
+    etDropObject:    TriggerLabel1 := 'Object dropped:';
+    etUseObject:     TriggerLabel1 := 'Object used:';
+    etUseObjectOn:   TriggerLabel1 := 'Object used:';
+    etExamineObject: TriggerLabel1 := 'Object examined:';
+    etTalkToMob:     TriggerLabel1 := 'Mob:';
+    etGiveTo:        TriggerLabel1 := 'Object given:';
+    etTimer:         TriggerLabel1 := 'Fires on turn:';
+    etFlagSet:       TriggerLabel1 := 'Flag set:';
+    etFlagClear:     TriggerLabel1 := 'Flag cleared:';
+  else
+    TriggerLabel1 := 'ID:';
+  end;
+end;
+
+function TriggerLabel2(T: TEventTrigger): string;
+begin
+  case T of
+    etExitRoom:    TriggerLabel2 := 'Room entered:';
+    etUseObjectOn: TriggerLabel2 := 'Used on object:';
+    etGiveTo:      TriggerLabel2 := 'Given to mob:';
+    etTimer:       TriggerLabel2 := 'Then every:';
+  else
+    TriggerLabel2 := '';
+  end;
+end;
+
+function CondHelp(C: TConditionType): string;
+begin
+  case C of
+    ctNone:           CondHelp := 'nothing, always passes';
+    ctHasObject:      CondHelp := 'player is carrying an object';
+    ctObjectInRoom:   CondHelp := 'an object is in a room';
+    ctMobInRoom:      CondHelp := 'a mob is in a room';
+    ctFlagIsSet:      CondHelp := 'a flag is set';
+    ctFlagIsClear:    CondHelp := 'a flag is clear';
+    ctCounterEquals:  CondHelp := 'a counter equals a number';
+    ctCounterGreater: CondHelp := 'a counter is more than a number';
+    ctCounterLess:    CondHelp := 'a counter is less than a number';
+    ctVisitedRoom:    CondHelp := 'the player has visited a room';
+    ctRoomIs:         CondHelp := 'the player is in a room';
+  else
+    CondHelp := '';
+  end;
+end;
+
+function CondLabel1(C: TConditionType): string;
+begin
+  case C of
+    ctHasObject, ctObjectInRoom: CondLabel1 := 'Object ID:';
+    ctMobInRoom:                 CondLabel1 := 'Mob ID:';
+    ctFlagIsSet, ctFlagIsClear:  CondLabel1 := 'Flag number:';
+    ctCounterEquals, ctCounterGreater,
+    ctCounterLess:               CondLabel1 := 'Counter number:';
+    ctVisitedRoom, ctRoomIs:     CondLabel1 := 'Room ID:';
+  else
+    CondLabel1 := '';
+  end;
+end;
+
+function CondLabel2(C: TConditionType): string;
+begin
+  case C of
+    ctObjectInRoom, ctMobInRoom: CondLabel2 := 'In room ID:';
+    ctCounterEquals, ctCounterGreater,
+    ctCounterLess:               CondLabel2 := 'Compared with:';
+  else
+    CondLabel2 := '';
+  end;
+end;
+
+function ActHelp(A: TActionType): string;
+begin
+  case A of
+    atNone:           ActHelp := 'nothing';
+    atShowMessage:    ActHelp := 'show a one-line message';
+    atShowParagraph:  ActHelp := 'show a story paragraph';
+    atSetFlag:        ActHelp := 'set a flag';
+    atClearFlag:      ActHelp := 'clear a flag';
+    atToggleFlag:     ActHelp := 'toggle a flag';
+    atSetCounter:     ActHelp := 'set a counter to a number';
+    atAddCounter:     ActHelp := 'add to a counter';
+    atSubCounter:     ActHelp := 'subtract from a counter';
+    atMoveObject:     ActHelp := 'move an object to a room';
+    atRemoveObject:   ActHelp := 'take an object out of play';
+    atSpawnObject:    ActHelp := 'place an object in a room';
+    atMoveMob:        ActHelp := 'move a mob to a room';
+    atRemoveMob:      ActHelp := 'take a mob out of play';
+    atUnlockExit:     ActHelp := 'open an exit';
+    atLockExit:       ActHelp := 'shut an exit';
+    atTeleportPlayer: ActHelp := 'move the player to a room';
+    atAddScore:       ActHelp := 'award points';
+    atEndGame:        ActHelp := 'end the game';
+    atEnableEvent:    ActHelp := 'enable another event';
+    atDisableEvent:   ActHelp := 'disable another event';
+  else
+    ActHelp := '';
+  end;
+end;
+
+function ActLabel1(A: TActionType): string;
+begin
+  case A of
+    atShowParagraph:  ActLabel1 := 'Paragraph number:';
+    atSetFlag, atClearFlag, atToggleFlag:
+                      ActLabel1 := 'Flag number:';
+    atSetCounter, atAddCounter, atSubCounter:
+                      ActLabel1 := 'Counter number:';
+    atMoveObject, atSpawnObject, atRemoveObject:
+                      ActLabel1 := 'Object ID:';
+    atMoveMob, atRemoveMob:
+                      ActLabel1 := 'Mob ID:';
+    atLockExit, atUnlockExit, atTeleportPlayer:
+                      ActLabel1 := 'Room ID:';
+    atAddScore:       ActLabel1 := 'Points:';
+    atEnableEvent, atDisableEvent:
+                      ActLabel1 := 'Event slot:';
+  else
+    ActLabel1 := '';
+  end;
+end;
+
+function ActLabel2(A: TActionType): string;
+begin
+  case A of
+    atSetCounter, atAddCounter, atSubCounter:
+                      ActLabel2 := 'Amount:';
+    atMoveObject, atSpawnObject, atMoveMob:
+                      ActLabel2 := 'Destination room:';
+    atEndGame:        ActLabel2 := 'Ending (0 win, 1 lose):';
+  else
+    ActLabel2 := '';
+  end;
+end;
+
+{ A modal list picker, used for the three enums. NewList takes ownership of
+  Items, so the dialog disposes them either way. Returns the chosen index or
+  -1 if the author cancelled. }
+function TEditorApp.PickIndex(const Title: string; Items: PStringCollection;
+                              Preselect: Integer): Integer;
+var
+  Dialog: PDialog;
+  R: TRect;
+  ListBox: PListBox;
+  ScrollBar: PScrollBar;
+  Control: Word;
+begin
+  PickIndex := -1;
+  R.Assign(12, 2, 68, 22);
+  Dialog := New(PDialog, Init(R, Title));
+
+  with Dialog^ do
+  begin
+    R.Assign(52, 2, 53, 15);
+    ScrollBar := New(PScrollBar, Init(R));
+    R.Assign(2, 2, 52, 15);
+    ListBox := New(PListBox, Init(R, 1, ScrollBar));
+    ListBox^.NewList(Items);
+    if (Preselect >= 0) and (Preselect < Items^.Count) then
+      ListBox^.FocusItem(Preselect);
+    Insert(ListBox);
+    Insert(ScrollBar);
+
+    R.Assign(12, 16, 22, 18);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+    R.Assign(28, 16, 40, 18);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+  if Control = cmOK then PickIndex := ListBox^.Focused;
+  Dispose(Dialog, Done);
+end;
+
+{ Type first, then the numbers - the dialog cannot relabel itself, so it is
+  built after the type is known and asks only for the fields that type uses. }
+function TEditorApp.EditOneCondition(var C: TCondition): Boolean;
+var
+  Items: PStringCollection;
+  CT: TConditionType;
+  Idx, Y: Integer;
+  Dialog: PDialog;
+  R: TRect;
+  Field1, Field2: PInputLine;
+  NegBox: PCheckBoxes;
+  Control, Flags: Word;
+  S: string;
+begin
+  EditOneCondition := False;
+
+  Items := New(PStringCollection, Init(12, 4));
+  for CT := Low(TConditionType) to High(TConditionType) do
+    Items^.Insert(NewStr(ConditionName(CT) + ' - ' + CondHelp(CT)));
+  Idx := PickIndex('Condition type', Items, Ord(C.CondType));
+  if Idx < 0 then Exit;
+  C.CondType := TConditionType(Idx);
+
+  if C.CondType = ctNone then
+  begin
+    C.TargetID := 0;
+    C.Value := 0;
+    C.Negate := False;
+    EditOneCondition := True;
+    Exit;
+  end;
+
+  R.Assign(14, 6, 66, 18);
+  Dialog := New(PDialog, Init(R, 'Condition: ' + ConditionName(C.CondType)));
+  Field1 := nil;
+  Field2 := nil;
+  Y := 2;
+
+  with Dialog^ do
+  begin
+    R.Assign(2, Y, 50, Y + 1);
+    Insert(New(PStaticText, Init(R, CondHelp(C.CondType))));
+    Inc(Y, 2);
+
+    if CondLabel1(C.CondType) <> '' then
+    begin
+      R.Assign(2, Y, 22, Y + 1);
+      Insert(New(PStaticText, Init(R, CondLabel1(C.CondType))));
+      R.Assign(23, Y, 33, Y + 1);
+      Field1 := New(PInputLine, Init(R, 6));
+      S := IntToStr(C.TargetID);
+      Field1^.SetData(S);
+      Insert(Field1);
+      Inc(Y, 2);
+    end;
+
+    if CondLabel2(C.CondType) <> '' then
+    begin
+      R.Assign(2, Y, 22, Y + 1);
+      Insert(New(PStaticText, Init(R, CondLabel2(C.CondType))));
+      R.Assign(23, Y, 33, Y + 1);
+      Field2 := New(PInputLine, Init(R, 6));
+      S := IntToStr(C.Value);
+      Field2^.SetData(S);
+      Insert(Field2);
+      Inc(Y, 2);
+    end;
+
+    R.Assign(2, Y, 48, Y + 1);
+    NegBox := New(PCheckBoxes, Init(R,
+      NewSItem('~N~OT - the condition must be false', nil)));
+    if C.Negate then Flags := 1 else Flags := 0;
+    NegBox^.SetData(Flags);
+    Insert(NegBox);
+
+    R.Assign(10, 9, 20, 11);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+    R.Assign(26, 9, 38, 11);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+  if Control = cmOK then
+  begin
+    if Field1 <> nil then
+    begin
+      S := '';
+      Field1^.GetData(S);
+      C.TargetID := StrToIntDef(S, 0);
+    end
+    else
+      C.TargetID := 0;
+
+    if Field2 <> nil then
+    begin
+      S := '';
+      Field2^.GetData(S);
+      C.Value := StrToIntDef(S, 0);
+    end
+    else
+      C.Value := 0;
+
+    NegBox^.GetData(Flags);
+    C.Negate := (Flags and 1) <> 0;
+    EditOneCondition := True;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+function TEditorApp.EditOneAction(var A: TAction): Boolean;
+var
+  Items: PStringCollection;
+  AT: TActionType;
+  Idx, Y: Integer;
+  Dialog: PDialog;
+  R: TRect;
+  Field1, Field2, TextField: PInputLine;
+  DirBox: PRadioButtons;
+  Control, Flags: Word;
+  S: string;
+  Dir: TDirection;
+  Dest: Word;
+begin
+  EditOneAction := False;
+
+  Items := New(PStringCollection, Init(24, 4));
+  for AT := Low(TActionType) to High(TActionType) do
+    Items^.Insert(NewStr(ActionName(AT) + ' - ' + ActHelp(AT)));
+  Idx := PickIndex('Action', Items, Ord(A.ActionType));
+  if Idx < 0 then Exit;
+  A.ActionType := TActionType(Idx);
+
+  if A.ActionType = atNone then
+  begin
+    A.TargetID := 0;
+    A.Value := 0;
+    A.Text := '';
+    EditOneAction := True;
+    Exit;
+  end;
+
+  R.Assign(10, 4, 70, 21);
+  Dialog := New(PDialog, Init(R, 'Action: ' + ActionName(A.ActionType)));
+  Field1 := nil;
+  Field2 := nil;
+  TextField := nil;
+  DirBox := nil;
+  Y := 2;
+
+  with Dialog^ do
+  begin
+    R.Assign(2, Y, 58, Y + 1);
+    Insert(New(PStaticText, Init(R, ActHelp(A.ActionType))));
+    Inc(Y, 2);
+
+    if ActLabel1(A.ActionType) <> '' then
+    begin
+      R.Assign(2, Y, 24, Y + 1);
+      Insert(New(PStaticText, Init(R, ActLabel1(A.ActionType))));
+      R.Assign(25, Y, 35, Y + 1);
+      Field1 := New(PInputLine, Init(R, 6));
+      S := IntToStr(A.TargetID);
+      Field1^.SetData(S);
+      Insert(Field1);
+      Inc(Y, 2);
+    end;
+
+    { The exit actions are the reason this dialog is built by hand: the
+      direction and the destination share one number, the direction in the
+      low three bits. Locking discards the destination, which is why
+      unlocking has to name it again. }
+    if A.ActionType in [atLockExit, atUnlockExit] then
+    begin
+      DecodeExitValue(A.Value, Dir, Dest);
+      R.Assign(2, Y, 24, Y + 1);
+      Insert(New(PStaticText, Init(R, 'Direction:')));
+      R.Assign(25, Y, 45, Y + 6);
+      DirBox := New(PRadioButtons, Init(R,
+        NewSItem('~N~orth', NewSItem('~S~outh', NewSItem('~E~ast',
+        NewSItem('~W~est', NewSItem('~U~p', NewSItem('~D~own', nil))))))));
+      Flags := Ord(Dir);
+      DirBox^.SetData(Flags);
+      Insert(DirBox);
+      Inc(Y, 6);
+
+      if A.ActionType = atUnlockExit then
+      begin
+        R.Assign(2, Y, 24, Y + 1);
+        Insert(New(PStaticText, Init(R, 'Leads to room:')));
+        R.Assign(25, Y, 35, Y + 1);
+        Field2 := New(PInputLine, Init(R, 6));
+        S := IntToStr(Dest);
+        Field2^.SetData(S);
+        Insert(Field2);
+        Inc(Y, 2);
+      end;
+    end
+    else if ActLabel2(A.ActionType) <> '' then
+    begin
+      R.Assign(2, Y, 24, Y + 1);
+      Insert(New(PStaticText, Init(R, ActLabel2(A.ActionType))));
+      R.Assign(25, Y, 35, Y + 1);
+      Field2 := New(PInputLine, Init(R, 6));
+      S := IntToStr(A.Value);
+      Field2^.SetData(S);
+      Insert(Field2);
+      Inc(Y, 2);
+    end;
+
+    if A.ActionType = atShowMessage then
+    begin
+      R.Assign(2, Y, 24, Y + 1);
+      Insert(New(PStaticText, Init(R, 'Message:')));
+      Inc(Y);
+      R.Assign(2, Y, 58, Y + 1);
+      TextField := New(PInputLine, Init(R, MAX_EVENT_TEXT));
+      S := A.Text;
+      TextField^.SetData(S);
+      Insert(TextField);
+      Inc(Y, 2);
+      R.Assign(2, Y, 58, Y + 1);
+      Insert(New(PStaticText, Init(R,
+        'One line. Longer prose belongs in a paragraph.')));
+    end;
+
+    R.Assign(12, 14, 22, 16);
+    Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+    R.Assign(30, 14, 42, 16);
+    Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+  if Control = cmOK then
+  begin
+    if Field1 <> nil then
+    begin
+      S := '';
+      Field1^.GetData(S);
+      A.TargetID := StrToIntDef(S, 0);
+    end
+    else
+      A.TargetID := 0;
+
+    if DirBox <> nil then
+    begin
+      DirBox^.GetData(Flags);
+      if Flags > Ord(High(TDirection)) then Flags := 0;
+      Dest := 0;
+      if Field2 <> nil then
+      begin
+        S := '';
+        Field2^.GetData(S);
+        Dest := StrToIntDef(S, 0);
+      end;
+      A.Value := EncodeExitValue(TDirection(Flags), Dest);
+    end
+    else if Field2 <> nil then
+    begin
+      S := '';
+      Field2^.GetData(S);
+      A.Value := StrToIntDef(S, 0);
+    end
+    else
+      A.Value := 0;
+
+    if TextField <> nil then
+    begin
+      S := '';
+      TextField^.GetData(S);
+      A.Text := S;
+    end
+    else
+      A.Text := '';
+
+    EditOneAction := True;
+  end;
+
+  Dispose(Dialog, Done);
+end;
+
+{ One list for both, because the two differ only in what a row says and what
+  editing a row opens. IsCond picks between them. }
+procedure TEditorApp.EditEventList(var E: TWorldEvent; IsCond: Boolean);
+var
+  Dialog: PDialog;
+  R: TRect;
+  ListBox: PListBox;
+  ScrollBar: PScrollBar;
+  Items: PStringCollection;
+  Control: Word;
+  I, Sel, Count, Limit: Integer;
+  Title: string;
+begin
+  repeat
+    if IsCond then
+    begin
+      Count := E.CondCount;
+      Limit := MAX_CONDITIONS;
+      Title := 'Conditions (all must hold)';
+    end
+    else
+    begin
+      Count := E.ActionCount;
+      Limit := MAX_ACTIONS;
+      Title := 'Actions (they run in order)';
+    end;
+
+    Items := New(PStringCollection, Init(10, 4));
+    for I := 1 to Count do
+      if IsCond then
+        Items^.Insert(NewStr(Format('%d. %s %d, %d%s',
+          [I, ConditionName(E.Conditions[I].CondType),
+           E.Conditions[I].TargetID, E.Conditions[I].Value,
+           BoolText(E.Conditions[I].Negate, '  (NOT)', '')])))
+      else
+        Items^.Insert(NewStr(Format('%d. %s %d, %d  %s',
+          [I, ActionName(E.Actions[I].ActionType),
+           E.Actions[I].TargetID, E.Actions[I].Value,
+           E.Actions[I].Text])));
+    if Count = 0 then
+      Items^.Insert(NewStr('(none yet - press Add)'));
+
+    R.Assign(8, 4, 72, 20);
+    Dialog := New(PDialog, Init(R, Title));
+    with Dialog^ do
+    begin
+      R.Assign(60, 2, 61, 11);
+      ScrollBar := New(PScrollBar, Init(R));
+      R.Assign(2, 2, 60, 11);
+      ListBox := New(PListBox, Init(R, 1, ScrollBar));
+      ListBox^.NewList(Items);
+      Insert(ListBox);
+      Insert(ScrollBar);
+
+      R.Assign(3, 12, 13, 14);
+      Insert(New(PButton, Init(R, '~A~dd', cmEvItemAdd, bfNormal)));
+      R.Assign(16, 12, 26, 14);
+      Insert(New(PButton, Init(R, '~E~dit', cmEvItemEdit, bfDefault)));
+      R.Assign(29, 12, 41, 14);
+      Insert(New(PButton, Init(R, '~D~elete', cmEvItemDel, bfNormal)));
+      R.Assign(48, 12, 60, 14);
+      Insert(New(PButton, Init(R, '~C~lose', cmCancel, bfNormal)));
+    end;
+
+    Control := Desktop^.ExecView(Dialog);
+    Sel := ListBox^.Focused;
+    Dispose(Dialog, Done);
+
+    case Control of
+      cmEvItemAdd:
+        if Count >= Limit then
+          MessageBox('All slots are used. Two events can share a trigger, ' +
+                     'which is how you write more than this.', nil,
+                     mfInformation + mfOKButton)
+        else if IsCond then
+        begin
+          Inc(E.CondCount);
+          E.Conditions[E.CondCount].CondType := ctNone;
+          E.Conditions[E.CondCount].TargetID := 0;
+          E.Conditions[E.CondCount].Value := 0;
+          E.Conditions[E.CondCount].Negate := False;
+          if not EditOneCondition(E.Conditions[E.CondCount]) then
+            Dec(E.CondCount)
+          else
+            Modified := True;
+        end
+        else
+        begin
+          Inc(E.ActionCount);
+          E.Actions[E.ActionCount].ActionType := atNone;
+          E.Actions[E.ActionCount].TargetID := 0;
+          E.Actions[E.ActionCount].Value := 0;
+          E.Actions[E.ActionCount].Text := '';
+          if not EditOneAction(E.Actions[E.ActionCount]) then
+            Dec(E.ActionCount)
+          else
+            Modified := True;
+        end;
+      cmEvItemEdit:
+        if (Sel >= 0) and (Sel < Count) then
+        begin
+          if IsCond then
+          begin
+            if EditOneCondition(E.Conditions[Sel + 1]) then Modified := True;
+          end
+          else
+            if EditOneAction(E.Actions[Sel + 1]) then Modified := True;
+        end;
+      cmEvItemDel:
+        if (Sel >= 0) and (Sel < Count) then
+        begin
+          { Closing the gap rather than blanking it: unlike an event slot,
+            nothing outside the event refers to a condition or action by
+            position. }
+          if IsCond then
+          begin
+            for I := Sel + 1 to E.CondCount - 1 do
+              E.Conditions[I] := E.Conditions[I + 1];
+            Dec(E.CondCount);
+          end
+          else
+          begin
+            for I := Sel + 1 to E.ActionCount - 1 do
+              E.Actions[I] := E.Actions[I + 1];
+            Dec(E.ActionCount);
+          end;
+          Modified := True;
+        end;
+    end;
+  until Control = cmCancel;
+end;
+
+procedure TEditorApp.EditEventBySlot(Slot: Integer);
+var
+  Dialog: PDialog;
+  R: TRect;
+  NameField, ID1Field, ID2Field: PInputLine;
+  OptBox: PCheckBoxes;
+  Items: PStringCollection;
+  T: TEventTrigger;
+  Control, Flags: Word;
+  Idx: Integer;
+  S: string;
+  E: TWorldEvent;
+  Finished: Boolean;
+begin
+  E := World.Events[Slot];
+
+  repeat
+    Finished := True;
+
+    R.Assign(6, 3, 74, 22);
+    Dialog := New(PDialog, Init(R, 'Event ' + IntToStr(Slot)));
+    ID1Field := nil;
+    ID2Field := nil;
+
+    with Dialog^ do
+    begin
+      R.Assign(2, 2, 12, 3);
+      Insert(New(PStaticText, Init(R, 'Name:')));
+      R.Assign(13, 2, 64, 3);
+      NameField := New(PInputLine, Init(R, MAX_EVENT_NAME));
+      S := E.Name;
+      NameField^.SetData(S);
+      Insert(NameField);
+
+      R.Assign(2, 4, 12, 5);
+      Insert(New(PStaticText, Init(R, 'Trigger:')));
+      R.Assign(13, 4, 64, 5);
+      Insert(New(PStaticText, Init(R, TriggerName(E.TriggerType) + ' - ' +
+                                     TriggerHelp(E.TriggerType))));
+
+      R.Assign(2, 6, 23, 7);
+      Insert(New(PStaticText, Init(R, TriggerLabel1(E.TriggerType))));
+      R.Assign(24, 6, 34, 7);
+      ID1Field := New(PInputLine, Init(R, 6));
+      S := IntToStr(E.TriggerID);
+      ID1Field^.SetData(S);
+      Insert(ID1Field);
+
+      if TriggerLabel2(E.TriggerType) <> '' then
+      begin
+        R.Assign(2, 8, 23, 9);
+        Insert(New(PStaticText, Init(R, TriggerLabel2(E.TriggerType))));
+        R.Assign(24, 8, 34, 9);
+        ID2Field := New(PInputLine, Init(R, 6));
+        S := IntToStr(E.TriggerID2);
+        ID2Field^.SetData(S);
+        Insert(ID2Field);
+      end
+      else
+      begin
+        R.Assign(2, 8, 64, 9);
+        Insert(New(PStaticText, Init(R,
+          'This trigger has no second ID.')));
+      end;
+
+      R.Assign(2, 10, 46, 12);
+      OptBox := New(PCheckBoxes, Init(R,
+        NewSItem('Fires ~o~nce only',
+        NewSItem('~E~nabled when the game starts', nil))));
+      Flags := 0;
+      if E.OneShot then Flags := Flags or 1;
+      if E.Enabled then Flags := Flags or 2;
+      OptBox^.SetData(Flags);
+      Insert(OptBox);
+
+      R.Assign(2, 13, 64, 14);
+      Insert(New(PStaticText, Init(R,
+        'Slot ' + IntToStr(Slot) + ' is this event''s identity: save games ' +
+        'record it.')));
+
+      R.Assign(2, 15, 18, 17);
+      Insert(New(PButton, Init(R, '~T~rigger...', cmEvTrigger, bfNormal)));
+      R.Assign(20, 15, 36, 17);
+      Insert(New(PButton, Init(R, 'C~o~nditions...', cmEvConds, bfNormal)));
+      R.Assign(38, 15, 52, 17);
+      Insert(New(PButton, Init(R, '~A~ctions...', cmEvActs, bfNormal)));
+
+      R.Assign(2, 17, 12, 19);
+      Insert(New(PButton, Init(R, '~O~K', cmOK, bfDefault)));
+      R.Assign(15, 17, 27, 19);
+      Insert(New(PButton, Init(R, '~C~ancel', cmCancel, bfNormal)));
+    end;
+
+    Control := Desktop^.ExecView(Dialog);
+
+    { Read the fields back before acting on any button, or a name typed
+      just before pressing Conditions would be lost }
+    if Control <> cmCancel then
+    begin
+      S := '';
+      NameField^.GetData(S);
+      E.Name := S;
+      S := '';
+      ID1Field^.GetData(S);
+      E.TriggerID := StrToIntDef(S, 0);
+      if ID2Field <> nil then
+      begin
+        S := '';
+        ID2Field^.GetData(S);
+        E.TriggerID2 := StrToIntDef(S, 0);
+      end
+      else
+        E.TriggerID2 := 0;
+      OptBox^.GetData(Flags);
+      E.OneShot := (Flags and 1) <> 0;
+      E.Enabled := (Flags and 2) <> 0;
+    end;
+
+    Dispose(Dialog, Done);
+
+    case Control of
+      cmEvTrigger:
+        begin
+          Items := New(PStringCollection, Init(16, 4));
+          for T := Low(TEventTrigger) to High(TEventTrigger) do
+            Items^.Insert(NewStr(TriggerName(T) + ' - ' + TriggerHelp(T)));
+          Idx := PickIndex('Trigger', Items, Ord(E.TriggerType));
+          if Idx >= 0 then
+          begin
+            { The IDs mean something else now, and carrying the old numbers
+              over would quietly point the event at the wrong thing }
+            E.TriggerType := TEventTrigger(Idx);
+            E.TriggerID := 0;
+            E.TriggerID2 := 0;
+          end;
+          Finished := False;
+        end;
+      cmEvConds:
+        begin
+          EditEventList(E, True);
+          Finished := False;
+        end;
+      cmEvActs:
+        begin
+          EditEventList(E, False);
+          Finished := False;
+        end;
+      cmOK:
+        begin
+          E.Active := True;
+          World.Events[Slot] := E;
+          if World.EventCount < Slot then World.EventCount := Slot;
+          SeedEventState(World);
+          Modified := True;
+        end;
+    end;
+  until Finished;
+end;
+
+procedure TEditorApp.AddEvent;
+var
+  Slot, I: Integer;
+begin
+  Slot := 0;
+  for I := 1 to MAX_EVENTS do
+    if not World.Events[I].Active then
+    begin
+      Slot := I;
+      Break;
+    end;
+
+  if Slot = 0 then
+  begin
+    MessageBox('All event slots are used.', nil, mfError + mfOKButton);
+    Exit;
+  end;
+
+  InitEvent(World.Events[Slot]);
+  EditEventBySlot(Slot);
+end;
+
+procedure TEditorApp.ListEvents;
+var
+  Dialog: PDialog;
+  R: TRect;
+  ListBox: PListBox;
+  ScrollBar: PScrollBar;
+  Control: Word;
+  I, Count, Sel: Integer;
+  Items: PStringCollection;
+  Slots: array[1..MAX_EVENTS] of Integer;
+begin
+  Items := New(PStringCollection, Init(10, 10));
+  Count := 0;
+
+  for I := 1 to MAX_EVENTS do
+    if World.Events[I].Active then
+    begin
+      Inc(Count);
+      Slots[Count] := I;
+      Items^.Insert(NewStr(Format('%3d: %-26s %-14s %s',
+        [I, World.Events[I].Name, TriggerName(World.Events[I].TriggerType),
+         BoolText(World.Events[I].Enabled, '', 'off')])));
+    end;
+
+  if Count = 0 then
+  begin
+    if MessageBox('No events yet. Add one now?', nil,
+                  mfConfirmation + mfYesButton + mfNoButton) = cmYes then
+      AddEvent;
+    Dispose(Items, Done);
+    Exit;
+  end;
+
+  R.Assign(4, 3, 76, 22);
+  Dialog := New(PDialog, Init(R, 'Events'));
+
+  with Dialog^ do
+  begin
+    R.Assign(68, 2, 69, 15);
+    ScrollBar := New(PScrollBar, Init(R));
+    R.Assign(2, 2, 68, 15);
+    ListBox := New(PListBox, Init(R, 1, ScrollBar));
+    ListBox^.NewList(Items);
+    Insert(ListBox);
+    Insert(ScrollBar);
+
+    R.Assign(6, 15, 16, 17);
+    Insert(New(PButton, Init(R, '~E~dit', cmEditEvent, bfDefault)));
+    R.Assign(20, 15, 30, 17);
+    Insert(New(PButton, Init(R, '~A~dd', cmAddEvent, bfNormal)));
+    R.Assign(34, 15, 46, 17);
+    Insert(New(PButton, Init(R, '~D~elete', cmDeleteEvent, bfNormal)));
+    R.Assign(52, 15, 64, 17);
+    Insert(New(PButton, Init(R, '~C~lose', cmCancel, bfNormal)));
+  end;
+
+  Control := Desktop^.ExecView(Dialog);
+  Sel := ListBox^.Focused;
+  Dispose(Dialog, Done);
+
+  if (Control = cmEditEvent) and (Sel >= 0) and (Sel < Count) then
+    EditEventBySlot(Slots[Sel + 1])
+  else if Control = cmAddEvent then
+    AddEvent
+  else if (Control = cmDeleteEvent) and (Sel >= 0) and (Sel < Count) then
+  begin
+    if MessageBox('Delete this event? Slot ' + IntToStr(Slots[Sel + 1]) +
+                  ' stays empty, so existing save games keep meaning what ' +
+                  'they meant.', nil,
+                  mfWarning + mfYesButton + mfNoButton) = cmYes then
+    begin
+      InitEvent(World.Events[Slots[Sel + 1]]);
+      World.EventCount := 0;
+      for I := MAX_EVENTS downto 1 do
+        if World.Events[I].Active then
+        begin
+          World.EventCount := I;
+          Break;
+        end;
+      SeedEventState(World);
+      Modified := True;
+    end;
+  end;
 end;
 
 procedure TEditorApp.WorldSettings;

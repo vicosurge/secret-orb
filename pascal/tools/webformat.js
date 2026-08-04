@@ -33,13 +33,28 @@ if (scriptStart < 0 || cut < 0) {
 const source = html.slice(scriptStart + "<script>".length, cut);
 
 // The model half touches the DOM in a few render helpers we never call, and
-// $ is used at load time by none of them. A stub keeps evaluation honest
-// without pretending to be a browser.
+// the playtest engine writes its output through it. The stub is the smallest
+// thing that lets say() and updateStatus() run: an element that remembers
+// what was appended to it, so a test can read the transcript back.
 const stub = `
-  const document = { getElementById: () => null, querySelectorAll: () => [],
-                     createElement: () => ({ style: {}, appendChild(){}, remove(){} }),
-                     addEventListener(){}, body: { appendChild(){} } };
+  const _els = {};
+  const _mkEl = () => ({
+    style: {}, className: "", textContent: "", innerHTML: "", value: "",
+    children: [], scrollTop: 0, scrollHeight: 0,
+    appendChild(c) { this.children.push(c); },
+    remove() {}, addEventListener() {}, setAttribute() {},
+    querySelector: () => _mkEl(), querySelectorAll: () => []
+  });
+  const document = {
+    getElementById(id) { return _els[id] || (_els[id] = _mkEl()); },
+    querySelectorAll: () => [],
+    createElement: () => _mkEl(),
+    addEventListener() {}, body: { appendChild() {} }
+  };
   const window = {};
+  const _screenText = () =>
+    document.getElementById("screen").children.map(c => c.textContent).join("");
+  const _clearScreen = () => { document.getElementById("screen").children = []; };
 `;
 
 // setWorld is defined here rather than in the page: the editor has no reason
@@ -49,8 +64,9 @@ const ctx = {};
 (new Function("exports", stub + source + "\n; Object.assign(exports, {" +
   ["blankWorld", "newRoom", "newObject", "newMob", "newEvent", "newCond", "newAction",
    "writeBinary", "readBinary", "writeText", "readText", "writeBPL", "readBPL",
-   "validate", "paraTriggers", "danglingParaRefs", "eventSlots", "eventCount"
-  ].join(",") + ", setWorld: w => { world = w; } });"
+   "validate", "paraTriggers", "danglingParaRefs", "eventSlots", "eventCount",
+   "startGame", "runCommand", "_screenText", "_clearScreen"
+  ].join(",") + ", setWorld: w => { world = w; }, getGame: () => game });"
 ))(ctx);
 
 let failures = 0, checks = 0;
@@ -244,6 +260,248 @@ s.events[2].actions[2].targetID = 9;
 useWorld(s);
 check("dangling references name the event and action",
       ctx.danglingParaRefs().some(d => d.startsWith("Event 2 action 3")));
+
+/* ---- The playtest interpreter --------------------------------------------
+
+   The page carries a browser copy of the engine so an author can try a world
+   without leaving the editor, and a copy that behaves differently from the
+   game is worse than no copy at all. These are the same properties
+   tools/eventtest.pas asserts about events.pas, checked against the twin. */
+
+// A world built for playing rather than for saving: two rooms, a key, a door,
+// a merchant, and events wired on top by each case.
+function playWorld() {
+  const w = ctx.blankWorld();
+  w.title = "Playtest";
+  w.startRoom = 1;
+
+  const r1 = ctx.newRoom(1);
+  r1.name = "Hall"; r1.desc = "A wide hall."; r1.exits.north = 2;
+  const r2 = ctx.newRoom(2);
+  r2.name = "Vault"; r2.desc = "A cold vault."; r2.exits.south = 1;
+  w.rooms.push(r1, r2);
+
+  const key = ctx.newObject(1);
+  key.name = "Key"; key.roomID = 1;
+  key.flags = { pickup: true, use: true, open: false, read: false };
+  const door = ctx.newObject(2);
+  door.name = "Door"; door.roomID = 1;
+  door.flags = { pickup: false, use: false, open: true, read: false };
+  w.objects.push(key, door);
+
+  const m = ctx.newMob(1);
+  m.name = "Merchant"; m.roomID = 1;
+  w.mobs.push(m);
+  return w;
+}
+
+function addEvent(w, slot, fields) {
+  const e = ctx.newEvent(fields.name || "e" + slot);
+  Object.assign(e, fields);
+  w.events[slot] = e;
+  return e;
+}
+
+function playCheck(what, cond) { check("playtest: " + what, cond); }
+
+console.log();
+console.log("Playtest interpreter:");
+
+// USE X ON Y reaches the trigger the game raises for it, and only for the
+// right pair.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "USEOBJECTON", triggerID: 1, triggerID2: 2,
+                   oneShot: false,
+                   actions: [{ type: "ADDCOUNTER", targetID: 1, value: 1, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  ctx.runCommand("use key on door");
+  playCheck("USE X ON Y fires USEOBJECTON", ctx.getGame().counters[1] === 1);
+  ctx.runCommand("use key with door");
+  playCheck("WITH is the same preposition", ctx.getGame().counters[1] === 2);
+  ctx.runCommand("use key");
+  playCheck("a bare USE does not fire it", ctx.getGame().counters[1] === 2);
+}
+
+// GIVE moves nothing by itself, and says so when no event answers.
+{
+  const w = playWorld();
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  ctx._clearScreen();
+  ctx.runCommand("give key to merchant");
+  playCheck("an unanswered gift is refused",
+            ctx._screenText().includes("does not want"));
+  playCheck("and the object stays in hand", ctx.getGame().inv.includes(1));
+}
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "GIVETO", triggerID: 1, triggerID2: 1,
+                   actions: [{ type: "SHOWMESSAGE", targetID: 0, value: 0,
+                               text: "The merchant takes it." }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  ctx._clearScreen();
+  ctx.runCommand("give key to merchant");
+  playCheck("an answered gift shows the event's message",
+            ctx._screenText().includes("The merchant takes it."));
+  playCheck("and no refusal alongside it",
+            !ctx._screenText().includes("does not want"));
+}
+
+// The timer, which is what started all of this.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "TIMER", triggerID: 3, triggerID2: 0,
+                   oneShot: false,
+                   actions: [{ type: "ADDCOUNTER", targetID: 1, value: 1, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("look");
+  ctx.runCommand("look");
+  playCheck("the timer has not come round yet", !ctx.getGame().counters[1]);
+  ctx.runCommand("look");
+  playCheck("it fires on its turn", ctx.getGame().counters[1] === 1);
+  ctx.runCommand("look");
+  playCheck("and not again without a period", ctx.getGame().counters[1] === 1);
+  const before = ctx.getGame().turns;
+  ctx.runCommand("score");
+  playCheck("a meta command does not tick the clock",
+            ctx.getGame().turns === before);
+}
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "TIMER", triggerID: 2, triggerID2: 2,
+                   oneShot: false,
+                   actions: [{ type: "ADDCOUNTER", targetID: 1, value: 1, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  for (let i = 0; i < 6; i++) ctx.runCommand("look");
+  playCheck("a repeating timer fires on 2, 4 and 6",
+            ctx.getGame().counters[1] === 3);
+}
+
+// A flag cascade: one event sets a flag, another waits on it.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "TAKEOBJECT", triggerID: 1,
+                   actions: [{ type: "SETFLAG", targetID: 1, value: 0, text: "" }] });
+  addEvent(w, 2, { trigger: "FLAGSET", triggerID: 1, oneShot: false,
+                   actions: [{ type: "ADDCOUNTER", targetID: 1, value: 1, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  playCheck("setting a flag fires the event waiting on it",
+            ctx.getGame().counters[1] === 1);
+  ctx.runCommand("drop key");
+  ctx.runCommand("take key");
+  playCheck("a one-shot does not fire twice", ctx.getGame().counters[1] === 1);
+}
+
+// Edge-triggered flag writes, the bound that stops the common runaway before
+// depth or budget has to.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "USEOBJECT", triggerID: 1, oneShot: false,
+                   actions: [{ type: "SETFLAG", targetID: 1, value: 0, text: "" }] });
+  addEvent(w, 2, { trigger: "FLAGSET", triggerID: 1, oneShot: false,
+                   actions: [{ type: "ADDCOUNTER", targetID: 1, value: 1, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  ctx.runCommand("use key");
+  ctx.runCommand("use key");
+  playCheck("re-setting a set flag fires nothing",
+            ctx.getGame().counters[1] === 1);
+}
+
+// A locked exit is runtime state, not world definition. Locking it must not
+// edit the author's room.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "TAKEOBJECT", triggerID: 1,
+                   actions: [{ type: "LOCKEXIT", targetID: 1, value: 0, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  playCheck("the exit is shut in the running game",
+            !ctx.getGame().exits.get(1).north);
+  playCheck("but the authored room is untouched", w.rooms[0].exits.north === 2);
+  ctx._clearScreen();
+  ctx.runCommand("north");
+  playCheck("and the player cannot go that way",
+            ctx._screenText().includes("cannot go that way"));
+}
+
+// A teleport has to run through the arrival machinery, or it skips
+// first-visit scoring and the arrival scene.
+{
+  const w = playWorld();
+  w.paragraphs[1] = "The vault is colder than you expected.";
+  w.rooms[1].points = 7;
+  w.rooms[1].firstVisitPara = 1;
+  addEvent(w, 1, { trigger: "TAKEOBJECT", triggerID: 1,
+                   actions: [{ type: "TELEPORTPLAYER", targetID: 2, value: 0, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx._clearScreen();
+  ctx.runCommand("take key");
+  playCheck("the teleport moved the player", ctx.getGame().room === 2);
+  playCheck("first-visit points were awarded", ctx.getGame().score === 7);
+  playCheck("and the arrival scene played",
+            ctx._screenText().includes("colder than you expected"));
+}
+
+// An event can end the game.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "TAKEOBJECT", triggerID: 1,
+                   actions: [{ type: "ENDGAME", targetID: 0, value: 0, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx._clearScreen();
+  ctx.runCommand("take key");
+  playCheck("ENDGAME wins the game", ctx.getGame().over === true);
+  playCheck("and says so", ctx._screenText().includes("YOU HAVE WON"));
+}
+
+// Every matching event fires, in slot order - which is how an author writes
+// more actions for one moment than a single event holds.
+{
+  const w = playWorld();
+  addEvent(w, 2, { trigger: "TAKEOBJECT", triggerID: 1,
+                   actions: [{ type: "SHOWMESSAGE", targetID: 0, value: 0, text: "second" }] });
+  addEvent(w, 1, { trigger: "TAKEOBJECT", triggerID: 1,
+                   actions: [{ type: "SHOWMESSAGE", targetID: 0, value: 0, text: "first" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx._clearScreen();
+  ctx.runCommand("take key");
+  playCheck("both fired, low slot first",
+            ctx._screenText().includes("first second"));
+}
+
+// A world whose events toggle each other must still return.
+{
+  const w = playWorld();
+  addEvent(w, 1, { trigger: "TAKEOBJECT", triggerID: 1, oneShot: false,
+                   actions: [{ type: "TOGGLEFLAG", targetID: 1, value: 0, text: "" }] });
+  addEvent(w, 2, { trigger: "FLAGSET", triggerID: 1, oneShot: false,
+                   actions: [{ type: "ADDCOUNTER", targetID: 1, value: 1, text: "" },
+                             { type: "TOGGLEFLAG", targetID: 1, value: 0, text: "" }] });
+  addEvent(w, 3, { trigger: "FLAGCLEAR", triggerID: 1, oneShot: false,
+                   actions: [{ type: "TOGGLEFLAG", targetID: 1, value: 0, text: "" }] });
+  useWorld(w);
+  ctx.startGame();
+  ctx.runCommand("take key");
+  playCheck("a toggle loop terminates", true);
+  playCheck("and it really ran", ctx.getGame().counters[1] > 0);
+  playCheck("bounded rather than runaway", ctx.getGame().counters[1] < 20);
+}
 
 console.log();
 if (failures === 0) {

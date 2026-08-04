@@ -54,36 +54,7 @@ direction, which is usually enough to find it.
 
 ---
 
-## 3. The event system is engine-only so far
-
-**Where:** `pascal/src/events.pas` is written and wired; the authoring and
-checking sides are not.
-
-The binary v4 / save v3 / text / BPL formats all carry events, and the
-interpreter runs them. All thirteen triggers can now fire — `USE X ON Y` and
-`GIVE X TO Y` parse, and `tools/parsetest.pas` covers them. `worldval.pas`
-checks events, the paragraph cross-reference credits event actions, and
-`web/editor.html` reads, writes and validates all of it, with
-`tools/webformat.js` holding the two implementations to the same bytes.
-
-One piece of the design is still missing:
-
-- **No editor can author an event.** All three read and write them faithfully,
-  but the only way to write one today is by hand in the text or BPL format.
-  The agreed split when this is picked up: `editor.pas` — the one that ships
-  on the floppy — gets a read-only list with delete and an enable toggle, and
-  full condition/action authoring goes in `editor-tv.pas` and
-  `web/editor.html`, where there is no size budget. `web/editor.html` also
-  still needs a `fireEvents` twin for its playtest engine, or the browser
-  playtest silently behaves differently from the game.
-
-**Cost:** a world can use events, but only an author willing to hand-edit
-world files. Nothing about them is checked any less than the rest of a world,
-so at least a mistake is now reported rather than silent.
-
----
-
-## 4. `atMoveObject` can only move an object to a room
+## 3. `atMoveObject` can only move an object to a room
 
 **Where:** `pascal/src/events.pas`, `RunActions`
 
