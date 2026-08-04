@@ -15,6 +15,12 @@ on:
       - 'pascal/**'
       - 'web/**'
   workflow_dispatch:
+  # Called by release.yml so a tagged release ships the binaries these exact
+  # jobs built and tested, rather than a second copy of the build that could
+  # drift from this one. A tag push cannot trigger this workflow directly:
+  # the paths filter above is evaluated against the commits in the push, and
+  # pushing a tag that points at an already-pushed commit contains none.
+  workflow_call:
 
 jobs:
   build-linux:
@@ -310,7 +316,11 @@ jobs:
             pascal/secretorb-dos32.zip
             pascal/secretorb-720k.img
 
-  release:
+  # One artifact holding all three platforms, for convenience while working on
+  # a branch. It is NOT the release: workflow artifacts expire and can only be
+  # downloaded by someone signed in to GitHub. Publishing to a Release, which
+  # is permanent and public, is release.yml's job.
+  bundle:
     needs: [build-linux, build-windows, build-dos32]
     runs-on: ubuntu-latest
     if: always() && needs.build-linux.result == 'success'
@@ -323,7 +333,7 @@ jobs:
       - name: List artifacts
         run: ls -lh
 
-      - name: Upload combined release
+      - name: Upload combined bundle
         uses: actions/upload-artifact@v4
         with:
           name: secretorb-all-platforms

@@ -1,0 +1,144 @@
+name: Release
+
+# Publishes a GitHub Release when a version tag is pushed:
+#
+#   git tag -a v0.1.0 -m "What is new in this one"
+#   git push origin v0.1.0
+#
+# Workflow artifacts are not a substitute for this. They expire, and only
+# someone signed in to GitHub can download one; a Release is permanent and
+# public, which is what a player following a link needs.
+#
+# A tag whose name carries a suffix - v0.2.0-rc1, v0.2.0-beta - is published
+# as a pre-release, so it does not become the "latest" download.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Lets a release be re-cut from the Actions tab if publishing failed after
+  # the builds passed, without deleting and re-pushing the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish (e.g. v0.1.0)'
+        required: true
+
+jobs:
+  # The same jobs that guard every push: all three platforms built, the unit
+  # tests run on Linux and again under FreeDOS, the shipped world validated,
+  # and the DOS distribution written onto a real 720KB floppy image. Reused
+  # rather than repeated, so a release cannot ship something CI never checked.
+  build:
+    uses: ./.github/workflows/pascal.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # The only thing here that needs write access, and the reason it is
+    # granted on this job rather than the whole workflow.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags, so the guard below can resolve one to a commit
+          fetch-depth: 0
+
+      - name: Work out which tag is being released
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+            # A manual run builds whatever ref it was dispatched on, which is
+            # not necessarily the tag. Publishing those binaries under the
+            # tag's name would be a lie, and a quiet one - so refuse.
+            TAGGED=$(git rev-list -n 1 "$TAG" 2>/dev/null || true)
+            if [ -z "$TAGGED" ]; then
+              echo "No such tag: $TAG"; exit 1
+            fi
+            if [ "$TAGGED" != "$GITHUB_SHA" ]; then
+              echo "Tag $TAG points at $TAGGED, but this run built $GITHUB_SHA."
+              echo "Dispatch this workflow from the tag itself, or push the tag."
+              exit 1
+            fi
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
+          # A dash in the version means a pre-release: v0.2.0-rc1 is not a
+          # thing anyone should be pointed at by /releases/latest.
+          case "$TAG" in
+            *-*) echo "prerelease=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # Downloaded by name rather than with a wildcard: the bundle artifact
+      # holds the same file names, and merging the two would have one
+      # silently overwrite the other.
+      - name: Download the Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: secretorb-linux-x64
+          path: dist
+
+      - name: Download the Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: secretorb-win32
+          path: dist
+
+      - name: Download the DOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: secretorb-dos32
+          path: dist
+
+      - name: Check every platform is present
+        working-directory: dist
+        run: |
+          ls -lh
+          for f in secretorb-linux-x64.tar.gz secretorb-win32.zip \
+                   secretorb-dos32.zip secretorb-720k.img; do
+            [ -f "$f" ] || { echo "missing from the release: $f"; exit 1; }
+          done
+
+      - name: Write the release notes preamble
+        run: |
+          cat > NOTES.md <<'EOF'
+          ### Downloads
+
+          | File | For |
+          |------|-----|
+          | `secretorb-linux-x64.tar.gz` | Linux, 64-bit. The game, the editor and the demo world. |
+          | `secretorb-win32.zip` | Windows, 32-bit. Runs on 64-bit Windows too. |
+          | `secretorb-dos32.zip` | DOS, 32-bit protected mode. Includes CWSDPMI, which it needs at run time. |
+          | `secretorb-720k.img` | The DOS build as a bootable-media floppy image, for emulators and real hardware. |
+
+          Unpack, then run `secretorb` to play or `editor` to build a world.
+          The DOS build wants a 386 or better; `SECORB.EXE` and `CWSDPMI.EXE`
+          must sit in the same directory.
+
+          Every file here was built and tested by CI: the unit tests run on
+          Linux and again on FreeDOS under QEMU, the shipped world is
+          validated, and the DOS distribution is written onto a real 720KB
+          FAT12 image — so if it did not fit on the disk this project is named
+          after, there would be no release.
+
+          ---
+          EOF
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: dist
+        run: |
+          gh release create "${{ steps.tag.outputs.name }}" \
+            --title "Secret Orb ${{ steps.tag.outputs.name }}" \
+            --notes-file ../NOTES.md \
+            --generate-notes \
+            ${{ steps.tag.outputs.prerelease == 'true' && '--prerelease' || '' }} \
+            secretorb-linux-x64.tar.gz \
+            secretorb-win32.zip \
+            secretorb-dos32.zip \
+            secretorb-720k.img

@@ -97,6 +97,38 @@ GitHub Actions builds for Linux, Windows, and DOS on every push to main. See
 tests must pass under DOS, the shipped world must validate, and the DOS converter
 must produce byte-identical world files to the Linux one.
 
+### Cutting a release
+
+```bash
+git tag -a v0.1.0 -m "What is new in this one"
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` builds all three platforms and publishes a
+GitHub Release carrying the Linux tarball, the Windows zip, the DOS zip and the
+720KB floppy image. A tag with a suffix — `v0.2.0-rc1` — is published as a
+pre-release, so it does not become the "latest" download.
+
+Three things about that workflow are deliberate:
+
+- It **reuses** `pascal.yml` through `workflow_call` rather than repeating the
+  builds. A release therefore ships exactly what CI built and tested, and there
+  is no second copy of the build to drift.
+- A tag push cannot trigger `pascal.yml` directly. Its `paths` filter is
+  evaluated against the commits in the push, and a tag pointing at an
+  already-pushed commit carries none — the run would be skipped. That is why
+  the trigger lives in a separate file.
+- `workflow_dispatch` is there to re-cut a release whose publish step failed
+  after the builds passed, without deleting and re-pushing the tag. It **checks
+  that the tag resolves to the commit the run built** and refuses otherwise: a
+  manual run builds the ref it was dispatched on, which need not be the tag, and
+  publishing those binaries under the tag's name would be a quiet lie.
+
+Workflow artifacts are not a release. They expire, and only someone signed in to
+GitHub can download one. The `bundle` job in `pascal.yml` produces a
+convenience artifact holding all three platforms for work on a branch; it is
+named that way rather than `release` so the distinction stays visible.
+
 ## Architecture
 
 ### Module Structure
