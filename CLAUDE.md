@@ -136,6 +136,28 @@ The codebase is organized into modular units in `pascal/src/`:
   - `secretorb.pas` must not list this unit in `uses`. The game runs from a
     720KB floppy and has no business carrying authoring checks
 
+- **events.pas**: The event interpreter — triggers, conditions, actions
+  - Engine code: it ships in the game, unlike `worldval.pas`. Execution is the
+    engine's job; telling an author their event is broken is the editor's
+  - Uses `GameData` and **nothing else**. It must never use `GameCore` —
+    `TGame` lives there, so a call in that direction would be a unit cycle —
+    and it never touches `Crt` or `Display`. Everything the player should see
+    comes back in a `TEventOutcome` that `gamecore.pas` drains
+  - That constraint is what makes it testable: `tools/eventtest.pas` drives it
+    from a plain `WriteLn` program, which CI runs on Linux *and* under
+    FreeDOS. `gamecore.pas` cannot be tested that way at all
+  - `FireEvents` fires **every** matching event in ascending slot order, not
+    just the first. That is how an author writes more than `MAX_ACTIONS`
+    actions for one trigger: two events sharing a trigger
+  - A cascade (`atSetFlag` → `etFlagSet` → `atSetFlag` …) is bounded four
+    ways: flag writes are **edge-triggered**, so re-setting a set flag fires
+    nothing; `Fired` is set *before* the actions run, so a one-shot cannot
+    re-enter itself; `MAX_EVENT_DEPTH` caps recursion; and `MAX_TURN_ACTIONS`
+    caps the whole batch, which bounds a wide fan-out too
+  - `atTeleportPlayer` is **reported, not applied** — the room change has to
+    run through `EnterRoom` in gamecore, which knows about first-visit scoring
+    and paragraphs
+
 - **gamecore.pas**: Game engine and command processing
   - Command parser: converts player input to `TCommandType` enum. Only the verb is
     upper-cased; the noun keeps its typed case so `SAVE`/`LOAD` file names survive
@@ -173,6 +195,12 @@ The codebase is organized into modular units in `pascal/src/`:
     | `Mob.FirstTalkPara` | `HandleTalk`, guarded by the new `World.Talked` bitmap |
     | `World.WinPara` | `ShowEnding`, before the score summary |
     | `World.LosePara` | `RunGame`, when the loop ends without `gsWon` — quitting is its own ending |
+
+    Since version 4 there is a seventh route: an event's `atShowParagraph`
+    action. It reaches the player through `ApplyOutcome` in gamecore.pas, which
+    calls the same `ShowParagraph`, so booklet mode still needs no special
+    case. `worldval.pas`'s `DescribeTriggers` has to know about it too, or an
+    event-fired paragraph gets cross-referenced as "fired by: NOTHING".
 
     Because the three trigger bitmaps are the same ones scoring already used and
     the save format already stored, a restored game never replays a scene.
@@ -223,8 +251,8 @@ World files support two formats with automatic detection:
 #### Binary Format (Default)
 
 The editor saves in binary format by default for space efficiency. Current version
-is **3**; versions 1 and 2 still load, with the new fields defaulting to 0 and (for
-version 1) the title derived from the file name. Saves always write version 3.
+is **4**; versions 1, 2 and 3 still load, with the new fields defaulting to 0 and (for
+version 1) the title derived from the file name. Saves always write version 4.
 
 - **Header**: 69 bytes — magic signature 'SORB', version, counts, start room, title,
   win room ID, win object ID, max score, then the story fields
@@ -256,6 +284,54 @@ repeat ParaCount times:
   Byte[Length] text          { Latin-1, #13#10 for hard line breaks }
 ```
 
+#### Version 4: events, flags and counters
+
+Version 4 is version 3 with three self-describing sections appended after the
+paragraph blob. No room, object or mob record changes, so `ReadBinaryV2Or3`
+absorbs v4 with one `if Version >= 4` and the dispatch reads `2, 3, 4:`.
+
+```
+Word  EventCount                { records that follow }
+repeat EventCount times:
+  Word  Size                    { bytes after this field }
+  Word  Number                  { the slot, 1..MAX_EVENTS }
+  Byte  NameLen ; Byte[NameLen] Name
+  Byte  TriggerType             { Ord(TEventTrigger) }
+  Word  TriggerID ; Word TriggerID2
+  Byte  Flags                   { bit 0 OneShot, bit 1 Enabled }
+  Byte  CondCount
+  repeat CondCount times:       { 6 bytes each, only the used ones }
+    Byte CondType ; Word TargetID ; SmallInt Value ; Byte Negate
+  Byte  ActionCount
+  repeat ActionCount times:     { only the used ones }
+    Byte ActionType ; Word TargetID ; SmallInt Value
+    Byte TextLen ; Byte[TextLen] Text
+Word  FlagNameCount    ; repeat: Byte Len + Len bytes
+Word  CounterNameCount ; repeat: Byte Len + Len bytes
+```
+
+**The event record is the one variable-length record in the format**, and
+deliberately so: a fixed record would reserve `MAX_ACTIONS` × `MAX_EVENT_TEXT`
+per event — 764 bytes where a realistic event uses under a hundred. The
+leading `Size` lets a reader skip a record whose tail it does not understand
+and makes truncation detectable. A world with no events costs 6 bytes.
+
+**An event's slot number is its identity and slots are never shifted**, the
+same rule paragraphs follow — but for a stronger reason than booklet
+numbering. A save game's `Fired` and `EvEnabled` bitmaps are indexed by slot,
+and `atEnableEvent`/`atDisableEvent` name a slot, so compacting on save would
+silently repoint every existing save at the wrong events. Because each record
+carries its own number, a gap costs *nothing* here, where a deleted paragraph
+still costs its two-byte zero length. `TWorldEvent` therefore has no `ID`
+field, and `EventCount` is the highest used slot, not a count of active ones.
+
+Enum fields go on disk as explicit `Byte` ordinals, never as the enum types: an
+FPC enum is four bytes by default and its width is a compiler setting, so
+writing the enum itself would make the file format depend on build flags. The
+enums are **append-only** — inserting a member reinterprets every world file
+ever written. Unknown ordinals are clamped to the inert member (`ctNone` /
+`atNone`) on read rather than cast blindly.
+
 The loader reads the 4-byte magic and version prefix *first*, then dispatches to a
 version-specific layout. A version 1 file is shorter than a version 2 header, so the
 layout must be chosen before reading any further. Versions 2 and 3 share a reader
@@ -267,7 +343,7 @@ Format validation: Magic signature check, version dispatch, IOResult error handl
 
 #### Save Games
 
-Save games are a separate file format from world files: magic 'SORS', version **2**,
+Save games are a separate file format from world files: magic 'SORS', version **3**,
 written by `SaveGameState` / read by `LoadGameState` in datafile.pas. A save stores
 position, score, turns, inventory, object and mob placement, and the
 visited/taken/talked bitmaps — but no world definition. The header carries a
@@ -279,6 +355,24 @@ and are exactly 8 bytes shorter, so they still load with `Talked` zero-filled.
 Those three bitmaps are also what gate the first-visit / first-take / first-talk
 story paragraphs, so saving them is what stops a restored game replaying scenes.
 No separate "paragraphs already seen" state is needed.
+
+Version 3 appends the event runtime state on the same principle — the flag
+bitmap, the counters, the `Fired` and `EvEnabled` bitmaps, and **the room
+exits**. Exits are world definition everywhere else, but `atLockExit` and
+`atUnlockExit` make them mutable, and a locked door that reopened itself on
+restore would be worse than no locking at all. Restoring a version 1 or 2 save
+resets flags and counters and reseeds `EvEnabled` from what the author wrote,
+rather than leaving whatever the current run had mutated them to.
+
+`WorldSignature` deliberately does **not** hash the events. Slot numbers are
+stable, so the bitmaps stay meaningful when an author adds or deletes an event,
+and every save written before events existed still matches its world.
+
+Two rules the action executor must honour, both save-corruption traps:
+`atRemoveObject` and `atRemoveMob` move an entity out of play (`RoomID := 0`,
+`CarriedBy := 0`) and **never clear `Active`** — the save writes one state
+record per active entity and validates the body length against the current
+active count, so clearing `Active` makes every existing save read as truncated.
 
 #### Text Format (Legacy/Manual Editing)
 
@@ -892,8 +986,8 @@ end;
 When implementing these features, increment the binary format version:
 - Version 1: basic rooms, objects, mobs
 - Version 2: world title, win condition, per-room and per-object points
-- Version 3 (current): story paragraphs, intro and endings, booklet mode
-- Version 4: Add events, flags, counters
+- Version 3: story paragraphs, intro and endings, booklet mode
+- Version 4 (current): events, flags and counters
 - Version 5: Add dialogue trees
 - Version 6: Add object states, containers, combinations
 
@@ -901,12 +995,22 @@ The paragraph store is the intended payload for Phase 1's `atShowMessage`: once 
 event system arrives, an action can carry a paragraph number instead of inline text,
 and the booklet stays a single source of truth for long-form prose.
 
-BPL carries the same fields at `{REVISION:3}`; earlier revisions still load:
+BPL carries the same fields at `{REVISION:4}`; earlier revisions still load:
 - WORLD: `{WINROOM:n}`, `{WINOBJ:n}`, `{INTRO:n}`, `{WINPARA:n}`, `{LOSEPARA:n}`, `{BOOKLET:1}`
 - ROOM: `{POINTS:n}`, `{FIRSTVISIT:n}`
 - OBJECT: `{POINTS:n}`, `{FIRSTTAKE:n}`
 - MOB: `{FIRSTTALK:n}`
 - `{START:PARAGRAPH}` blocks with `{OC:n}` and `{TEXT:...}`
+- `{START:EVENT}` blocks with `{OC:n}` — the **slot**, not a running index —
+  plus `{NAME:}`, `{TRIGGER:}`, `{TRIGGERID:}`, `{TRIGGERID2:}`, `{ONESHOT:}`,
+  `{ENABLED:}`, and repeating `{COND:}` / `{ACTION:}` tags. `COND` and `ACTION`
+  **accumulate** where every other BPL tag assigns
+- WORLD: `{FLAGNAME:n,name}`, `{COUNTERNAME:n,name}`
+
+A `{COND:}` or `{ACTION:}` value is a comma-separated list whose last field —
+an action's message — takes everything after the third comma verbatim, so it
+may contain commas. It may not contain braces, which would end the tag early;
+`EscapeBraces` substitutes them the way `EncodeParaText` does.
 
 A BPL tag value is one line and cannot contain braces, so paragraph line breaks
 travel as a `\n` escape (`EncodeParaText`/`DecodeParaText` in bplpars.pas). Paragraphs

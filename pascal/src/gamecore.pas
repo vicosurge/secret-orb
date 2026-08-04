@@ -6,7 +6,7 @@ unit GameCore;
 interface
 
 uses
-  Crt, SysUtils, GameData, DataFile, Display;
+  Crt, SysUtils, GameData, DataFile, Display, Events;
 
 type
   TCommandType = (
@@ -44,6 +44,11 @@ type
       never repeats itself and never replays a save or a help screen. }
     PrevCmd: TCommandType;
     PrevNoun: string[40];
+    { What the events fired by the command in hand want to say or do. Filled
+      by the hooks in the handlers, drained by RunGame at a scene boundary -
+      a paragraph clears the screen, so it cannot be shown from inside a
+      handler that is still building LastMessage. }
+    Pending: TEventOutcome;
   end;
 
 procedure InitGame(var G: TGame);
@@ -81,6 +86,7 @@ begin
   G.SaveFile := DEFAULT_SAVE;
   G.PrevCmd := cmdNone;
   G.PrevNoun := '';
+  ClearOutcome(G.Pending);
 end;
 
 function LoadGame(var G: TGame; const FileName: string): Boolean;
@@ -205,9 +211,39 @@ begin
     Result := cmdUnknown;
 end;
 
+{ Every trigger site goes through here, so the queue is the only way an event
+  can reach the player and there is one place to put a breakpoint. }
+procedure Fire(var G: TGame; Trig: TEventTrigger; ID1, ID2: Word);
+begin
+  FireEvents(G.World, Trig, ID1, ID2, G.Pending);
+end;
+
+{ Everything that happens on arriving in a room: the visited bitmap, the
+  first-visit points and the arrival scene, plus the enter and first-visit
+  triggers. MovePlayer, the start-room block in RunGame and a teleporting
+  event all come through here, so no caller can miss half of it - which is
+  what used to make Room.FirstVisitPara a trigger with two separate sites.
+  Returns the points awarded, because MovePlayer shows them and the start
+  room does not. }
+function EnterRoom(var G: TGame; TargetIdx: Integer): Word;
+begin
+  Result := 0;
+  Fire(G, etEnterRoom, G.World.Rooms[TargetIdx].ID, 0);
+
+  if not G.World.Visited[TargetIdx] then
+  begin
+    G.World.Visited[TargetIdx] := True;
+    Result := G.World.Rooms[TargetIdx].Points;
+    Inc(G.World.Score, Result);
+    ShowParagraph(G, G.World.Rooms[TargetIdx].FirstVisitPara);
+    Fire(G, etFirstVisit, G.World.Rooms[TargetIdx].ID, 0);
+  end;
+end;
+
 procedure MovePlayer(var G: TGame; Dir: TDirection);
 var
   Idx, TargetID, TargetIdx: Integer;
+  Points: Word;
 begin
   Idx := FindRoomByID(G.World, G.World.CurrentRoom);
   if Idx < 0 then
@@ -230,21 +266,16 @@ begin
     Exit;
   end;
 
+  { Fired before the move, with the room being left, so a condition of
+    ctRoomIs in the event still names the room the player is walking out of }
+  Fire(G, etExitRoom, G.World.Rooms[Idx].ID, TargetID);
+
   G.World.CurrentRoom := TargetID;
   G.LastMessage := 'You go ' + GetExitName(Dir) + '.';
 
-  { Award first-visit points once, and play the room's arrival scene }
-  if not G.World.Visited[TargetIdx] then
-  begin
-    G.World.Visited[TargetIdx] := True;
-    if G.World.Rooms[TargetIdx].Points > 0 then
-    begin
-      Inc(G.World.Score, G.World.Rooms[TargetIdx].Points);
-      G.LastMessage := G.LastMessage + ' [+' +
-                       IntToStr(G.World.Rooms[TargetIdx].Points) + ']';
-    end;
-    ShowParagraph(G, G.World.Rooms[TargetIdx].FirstVisitPara);
-  end;
+  Points := EnterRoom(G, TargetIdx);
+  if Points > 0 then
+    G.LastMessage := G.LastMessage + ' [+' + IntToStr(Points) + ']';
 end;
 
 { The world is won by reaching WinRoomID, optionally while carrying WinObjectID }
@@ -360,6 +391,11 @@ begin
       Inc(G.World.Turns);
       G.PrevCmd := Cmd;
       G.PrevNoun := G.LastNoun;
+      { Inside this branch on purpose: a timer inherits the meta-command
+        exclusion above for free, so HELP, SCORE, SAVE, LOAD and EXITS do not
+        advance the clock. That is the whole argument for hooking here rather
+        than in RunGame's loop. }
+      Fire(G, etTimer, 0, 0);
     end;
   end;
 
@@ -528,6 +564,7 @@ begin
   if ObjIdx > 0 then
   begin
     G.LastMessage := G.World.Objects[ObjIdx].Desc;
+    Fire(G, etExamineObject, G.World.Objects[ObjIdx].ID, 0);
     Exit;
   end;
 
@@ -596,6 +633,8 @@ begin
     end;
     ShowParagraph(G, G.World.Objects[ObjIdx].FirstTakePara);
   end;
+
+  Fire(G, etTakeObject, G.World.Objects[ObjIdx].ID, 0);
 end;
 
 procedure HandleDrop(var G: TGame; const Noun: string);
@@ -642,6 +681,8 @@ begin
   G.World.Objects[ObjIdx].CarriedBy := 0;
 
   G.LastMessage := 'You drop the ' + G.World.Objects[ObjIdx].Name + '.';
+
+  Fire(G, etDropObject, G.World.Objects[ObjIdx].ID, 0);
 end;
 
 procedure HandleUse(var G: TGame; const Noun: string);
@@ -673,6 +714,8 @@ begin
     G.LastMessage := G.World.Objects[ObjIdx].UseText
   else
     G.LastMessage := 'You use the ' + G.World.Objects[ObjIdx].Name + '.';
+
+  Fire(G, etUseObject, G.World.Objects[ObjIdx].ID, 0);
 end;
 
 procedure HandleOpen(var G: TGame; const Noun: string);
@@ -770,6 +813,8 @@ begin
     G.World.Talked[MobIdx] := True;
     ShowParagraph(G, G.World.Mobs[MobIdx].FirstTalkPara);
   end;
+
+  Fire(G, etTalkToMob, G.World.Mobs[MobIdx].ID, 0);
 end;
 
 procedure HandleInventory(var G: TGame);
@@ -818,6 +863,62 @@ begin
   WaitKey;
 end;
 
+{ Drains what the events fired this turn want to do. Called from RunGame
+  between the command and the next room draw - a scene boundary, because
+  ShowParagraph clears the screen and LastMessage has not been drawn yet.
+  Paragraphs go through the same ShowParagraph as the six built-in story
+  triggers, so booklet mode needs no special case here. }
+procedure ApplyOutcome(var G: TGame);
+var
+  I: Integer;
+  Idx: Integer;
+  O: TEventOutcome;
+begin
+  if (G.Pending.Message = '') and (G.Pending.ParaCount = 0) and
+     (G.Pending.Points = 0) and (G.Pending.Ending = ekNone) and
+     (G.Pending.Teleport = 0) then Exit;
+
+  { Taken by value and cleared first: a teleport re-enters EnterRoom, which
+    can fire more events into G.Pending, and those belong to the next drain
+    rather than to the one already in progress. }
+  O := G.Pending;
+  ClearOutcome(G.Pending);
+
+  if O.Message <> '' then
+  begin
+    if G.LastMessage = '' then
+      G.LastMessage := O.Message
+    else
+      G.LastMessage := G.LastMessage + ' ' + O.Message;
+  end;
+
+  if O.Points > 0 then
+  begin
+    Inc(G.World.Score, O.Points);
+    G.LastMessage := G.LastMessage + ' [+' + IntToStr(O.Points) + ']';
+  end;
+
+  for I := 1 to O.ParaCount do
+    ShowParagraph(G, O.Paras[I]);
+
+  if O.Teleport <> 0 then
+  begin
+    Idx := FindRoomByID(G.World, O.Teleport);
+    if Idx > 0 then
+    begin
+      G.World.CurrentRoom := O.Teleport;
+      EnterRoom(G, Idx);
+    end;
+  end;
+
+  case O.Ending of
+    ekWin:  G.State := gsWon;
+    ekLose: G.State := gsQuit;
+    ekNone: ;
+  end;
+end;
+
+
 procedure RunGame(var G: TGame);
 var
   Input: string;
@@ -831,12 +932,9 @@ begin
   { The starting room counts as visited, and scores like any other. It never
     goes through HandleMove, so its arrival scene has to be played here. }
   StartIdx := FindRoomByID(G.World, G.World.CurrentRoom);
-  if (StartIdx > 0) and not G.World.Visited[StartIdx] then
-  begin
-    G.World.Visited[StartIdx] := True;
-    Inc(G.World.Score, G.World.Rooms[StartIdx].Points);
-    ShowParagraph(G, G.World.Rooms[StartIdx].FirstVisitPara);
-  end;
+  if StartIdx > 0 then
+    EnterRoom(G, StartIdx);
+  ApplyOutcome(G);
 
   while G.State = gsPlaying do
   begin
@@ -844,6 +942,7 @@ begin
     Input := ReadLine(3, G.PromptY, 60);
     Cmd := ParseCommand(Input, G.LastNoun);
     ExecuteCommand(G, Cmd);
+    ApplyOutcome(G);
   end;
 
   if G.State = gsWon then

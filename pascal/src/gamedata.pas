@@ -23,6 +23,22 @@ const
   MAX_PARA_LEN = 1600;      { About MAX_PARA_LINES x 76 columns }
   { TGameWorld.WorldFlags bits }
   WF_BOOKLET = $01;         { Cite paragraph numbers instead of printing them }
+  { Events. MAX_EVENTS is 128 rather than the 256 the design document names,
+    and an action's inline text is a short string rather than a plain "string":
+    these units compile with short strings on, so a bare "string" field is a
+    256-byte ShortString, and 256 events x 8 actions of those would be half a
+    megabyte of static data. Keeping TAction a fixed record - no AnsiString -
+    is also what lets an event be FillChar-zeroed and BlockWrite-n like every
+    other record here, which is what keeps world files reproducible. Prose too
+    long for MAX_EVENT_TEXT belongs in a paragraph; atShowParagraph cites one. }
+  MAX_EVENTS = 128;
+  MAX_FLAGS = 64;
+  MAX_COUNTERS = 32;
+  MAX_CONDITIONS = 4;       { ANDed together }
+  MAX_ACTIONS = 8;
+  MAX_EVENT_TEXT = 80;      { One line of inline message }
+  MAX_EVENT_NAME = 40;      { Editor display only, never shown to the player }
+  MAX_VAR_NAME = 30;        { Flag and counter names, also editor-only }
 
 type
   TDirection = (dirNorth, dirSouth, dirEast, dirWest, dirUp, dirDown);
@@ -75,6 +91,72 @@ type
   TParaText = AnsiString;
   TParagraphArray = array[1..MAX_PARAGRAPHS] of TParaText;
 
+  { --- Events --------------------------------------------------------------
+    An event is a trigger, up to MAX_CONDITIONS conditions that all have to
+    hold, and up to MAX_ACTIONS actions run in order. The record is named
+    TWorldEvent, not TEvent: editor-tv.pas uses both this unit and Turbo
+    Vision, whose own TEvent would collide. }
+  TEventTrigger = (etEnterRoom, etExitRoom, etFirstVisit,
+                   etTakeObject, etDropObject,
+                   etUseObject, etUseObjectOn, etExamineObject,
+                   etTalkToMob, etGiveTo,
+                   etTimer, etFlagSet, etFlagClear);
+
+  TConditionType = (ctNone, ctHasObject, ctObjectInRoom, ctMobInRoom,
+                    ctFlagIsSet, ctFlagIsClear,
+                    ctCounterEquals, ctCounterGreater, ctCounterLess,
+                    ctVisitedRoom, ctRoomIs);
+
+  TCondition = packed record
+    CondType: TConditionType;  { ctNone = unused slot }
+    TargetID: Word;            { Object / mob / room / flag / counter }
+    Value: SmallInt;           { Comparison value for the counter tests }
+    Negate: Boolean;           { NOT this condition }
+  end;
+
+  TActionType = (atNone, atShowMessage, atShowParagraph,
+                 atSetFlag, atClearFlag, atToggleFlag,
+                 atSetCounter, atAddCounter, atSubCounter,
+                 atMoveObject, atRemoveObject, atSpawnObject,
+                 atMoveMob, atRemoveMob,
+                 atUnlockExit, atLockExit,
+                 atTeleportPlayer, atAddScore, atEndGame,
+                 atEnableEvent, atDisableEvent);
+
+  TAction = packed record
+    ActionType: TActionType;
+    TargetID: Word;                { Object / mob / room / flag / paragraph }
+    Value: SmallInt;               { Amount, secondary ID, or direction }
+    Text: string[MAX_EVENT_TEXT];  { atShowMessage only; '' otherwise }
+  end;
+
+  { An event has no ID field: its slot number IS its identity, and slots are
+    never shifted or reused, exactly as paragraph numbers are not. Paragraphs
+    need that because the numbers are printed in a booklet; events need it for
+    a harder reason - the Fired and EvEnabled bitmaps in a save game are
+    indexed by slot, and atEnableEvent/atDisableEvent name a slot. Compacting
+    on save would silently repoint every existing save at the wrong events. }
+  TWorldEvent = record
+    Name: string[MAX_EVENT_NAME];
+    TriggerType: TEventTrigger;
+    TriggerID: Word;               { Entity that fires it, or the turn number }
+    TriggerID2: Word;              { Secondary entity, or the timer period }
+    Conditions: array[1..MAX_CONDITIONS] of TCondition;
+    CondCount: Byte;
+    Actions: array[1..MAX_ACTIONS] of TAction;
+    ActionCount: Byte;
+    OneShot: Boolean;              { Fire at most once per game }
+    Enabled: Boolean;              { INITIAL state; W.EvEnabled is the live one }
+    Active: Boolean;               { Slot in use }
+  end;
+
+  TEventArray = array[1..MAX_EVENTS] of TWorldEvent;
+  TFlagArray = array[1..MAX_FLAGS] of Boolean;
+  TCounterArray = array[1..MAX_COUNTERS] of SmallInt;
+  TEventBoolArray = array[1..MAX_EVENTS] of Boolean;
+  TFlagNameArray = array[1..MAX_FLAGS] of string[MAX_VAR_NAME];
+  TCounterNameArray = array[1..MAX_COUNTERS] of string[MAX_VAR_NAME];
+
   TGameWorld = record
     Rooms: TRoomArray;
     RoomCount: Word;
@@ -97,17 +179,30 @@ type
     WinPara: Word;          { Shown on winning }
     LosePara: Word;         { Shown when the game ends without a win }
     WorldFlags: Byte;       { WF_* bits }
+    { Events, and the names the author gave the flags and counters they use.
+      The names are an authoring aid - the engine only ever indexes by number }
+    Events: TEventArray;
+    EventCount: Word;         { Highest used slot, not a count of active ones }
+    FlagNames: TFlagNameArray;
+    CounterNames: TCounterNameArray;
     { Player progress }
     Score: Word;
     Turns: Word;
     Visited: TVisitedArray;   { By room array index, not room ID }
     Taken: TTakenArray;       { By object array index - points award once only }
     Talked: TTalkedArray;     { By mob array index - first-talk scene fires once }
+    { Event runtime state. Saved with the rest of the progress, so a restored
+      game neither replays a one-shot scene nor forgets a flag it had set }
+    Flags: TFlagArray;
+    Counters: TCounterArray;
+    Fired: TEventBoolArray;     { By event array index - gates OneShot }
+    EvEnabled: TEventBoolArray; { Events can switch other events off }
   end;
 
 procedure InitRoom(var R: TRoom);
 procedure InitObject(var O: TGameObject);
 procedure InitMob(var M: TMob);
+procedure InitEvent(var E: TWorldEvent);
 procedure InitWorld(var W: TGameWorld);
 function GetExitName(Dir: TDirection): string;
 function OppositeDir(Dir: TDirection): TDirection;
@@ -123,6 +218,30 @@ function PlayerHasObject(var W: TGameWorld; ID: Word): Boolean;
 function ComputeMaxScore(var W: TGameWorld): Word;
 function ParagraphText(var W: TGameWorld; Num: Word): TParaText;
 procedure SetParagraph(var W: TGameWorld; Num: Word; const S: TParaText);
+{ atLockExit and atUnlockExit need three numbers - room, direction and (for
+  unlock) where the exit leads - and a TAction carries only TargetID and
+  Value. The room goes in TargetID; the direction and destination share Value,
+  the direction in the low three bits. Unlock has to name the destination
+  because locking discards it. }
+function EncodeExitValue(Dir: TDirection; Dest: Word): SmallInt;
+procedure DecodeExitValue(V: SmallInt; var Dir: TDirection; var Dest: Word);
+
+{ Copies the authored Enabled flags into the live EvEnabled bitmap. Called
+  after loading a world, and again by a save-game restore only when the save
+  predates the event state - otherwise the save's own bitmap wins. }
+procedure SeedEventState(var W: TGameWorld);
+
+{ Stable spellings for the event enums. These are what the text and BPL
+  formats write and what the editors show, so they are part of the file
+  format: renaming one silently changes the meaning of every world that used
+  it. The From* functions return the inert member for anything unrecognised,
+  which is how a file written by a newer build degrades rather than breaks. }
+function TriggerName(T: TEventTrigger): string;
+function TriggerFromName(const S: string): TEventTrigger;
+function ConditionName(C: TConditionType): string;
+function ConditionFromName(const S: string): TConditionType;
+function ActionName(A: TActionType): string;
+function ActionFromName(const S: string): TActionType;
 
 implementation
 
@@ -165,6 +284,35 @@ begin
   M.FirstTalkPara := 0;
 end;
 
+procedure InitEvent(var E: TWorldEvent);
+var
+  I: Integer;
+begin
+  E.Name := '';
+  E.TriggerType := etEnterRoom;
+  E.TriggerID := 0;
+  E.TriggerID2 := 0;
+  for I := 1 to MAX_CONDITIONS do
+  begin
+    E.Conditions[I].CondType := ctNone;
+    E.Conditions[I].TargetID := 0;
+    E.Conditions[I].Value := 0;
+    E.Conditions[I].Negate := False;
+  end;
+  E.CondCount := 0;
+  for I := 1 to MAX_ACTIONS do
+  begin
+    E.Actions[I].ActionType := atNone;
+    E.Actions[I].TargetID := 0;
+    E.Actions[I].Value := 0;
+    E.Actions[I].Text := '';
+  end;
+  E.ActionCount := 0;
+  E.OneShot := True;
+  E.Enabled := True;
+  E.Active := False;
+end;
+
 procedure InitWorld(var W: TGameWorld);
 var
   I: Integer;
@@ -193,6 +341,13 @@ begin
   W.WinPara := 0;
   W.LosePara := 0;
   W.WorldFlags := 0;
+  W.EventCount := 0;
+  for I := 1 to MAX_EVENTS do
+    InitEvent(W.Events[I]);
+  for I := 1 to MAX_FLAGS do
+    W.FlagNames[I] := '';
+  for I := 1 to MAX_COUNTERS do
+    W.CounterNames[I] := '';
   W.Score := 0;
   W.Turns := 0;
   for I := 1 to MAX_ROOMS do
@@ -201,6 +356,16 @@ begin
     W.Taken[I] := False;
   for I := 1 to MAX_MOBS do
     W.Talked[I] := False;
+  for I := 1 to MAX_FLAGS do
+    W.Flags[I] := False;
+  for I := 1 to MAX_COUNTERS do
+    W.Counters[I] := 0;
+  for I := 1 to MAX_EVENTS do
+  begin
+    W.Fired[I] := False;
+    { Enabled by default - atDisableEvent is what switches one off }
+    W.EvEnabled[I] := True;
+  end;
 end;
 
 function GetExitName(Dir: TDirection): string;
@@ -424,6 +589,146 @@ begin
         Exit;
       end;
     end;
+end;
+
+function TriggerName(T: TEventTrigger): string;
+begin
+  case T of
+    etEnterRoom:     Result := 'ENTERROOM';
+    etExitRoom:      Result := 'EXITROOM';
+    etFirstVisit:    Result := 'FIRSTVISIT';
+    etTakeObject:    Result := 'TAKEOBJECT';
+    etDropObject:    Result := 'DROPOBJECT';
+    etUseObject:     Result := 'USEOBJECT';
+    etUseObjectOn:   Result := 'USEOBJECTON';
+    etExamineObject: Result := 'EXAMINEOBJECT';
+    etTalkToMob:     Result := 'TALKTOMOB';
+    etGiveTo:        Result := 'GIVETO';
+    etTimer:         Result := 'TIMER';
+    etFlagSet:       Result := 'FLAGSET';
+    etFlagClear:     Result := 'FLAGCLEAR';
+  else
+    Result := 'ENTERROOM';
+  end;
+end;
+
+function TriggerFromName(const S: string): TEventTrigger;
+var
+  T: TEventTrigger;
+  U: string;
+begin
+  U := StrUpper(S);
+  for T := Low(TEventTrigger) to High(TEventTrigger) do
+    if TriggerName(T) = U then
+    begin
+      Result := T;
+      Exit;
+    end;
+  Result := etEnterRoom;
+end;
+
+function ConditionName(C: TConditionType): string;
+begin
+  case C of
+    ctNone:           Result := 'NONE';
+    ctHasObject:      Result := 'HASOBJECT';
+    ctObjectInRoom:   Result := 'OBJECTINROOM';
+    ctMobInRoom:      Result := 'MOBINROOM';
+    ctFlagIsSet:      Result := 'FLAGISSET';
+    ctFlagIsClear:    Result := 'FLAGISCLEAR';
+    ctCounterEquals:  Result := 'COUNTEREQUALS';
+    ctCounterGreater: Result := 'COUNTERGREATER';
+    ctCounterLess:    Result := 'COUNTERLESS';
+    ctVisitedRoom:    Result := 'VISITEDROOM';
+    ctRoomIs:         Result := 'ROOMIS';
+  else
+    Result := 'NONE';
+  end;
+end;
+
+function ConditionFromName(const S: string): TConditionType;
+var
+  C: TConditionType;
+  U: string;
+begin
+  U := StrUpper(S);
+  for C := Low(TConditionType) to High(TConditionType) do
+    if ConditionName(C) = U then
+    begin
+      Result := C;
+      Exit;
+    end;
+  Result := ctNone;
+end;
+
+function ActionName(A: TActionType): string;
+begin
+  case A of
+    atNone:           Result := 'NONE';
+    atShowMessage:    Result := 'SHOWMESSAGE';
+    atShowParagraph:  Result := 'SHOWPARAGRAPH';
+    atSetFlag:        Result := 'SETFLAG';
+    atClearFlag:      Result := 'CLEARFLAG';
+    atToggleFlag:     Result := 'TOGGLEFLAG';
+    atSetCounter:     Result := 'SETCOUNTER';
+    atAddCounter:     Result := 'ADDCOUNTER';
+    atSubCounter:     Result := 'SUBCOUNTER';
+    atMoveObject:     Result := 'MOVEOBJECT';
+    atRemoveObject:   Result := 'REMOVEOBJECT';
+    atSpawnObject:    Result := 'SPAWNOBJECT';
+    atMoveMob:        Result := 'MOVEMOB';
+    atRemoveMob:      Result := 'REMOVEMOB';
+    atUnlockExit:     Result := 'UNLOCKEXIT';
+    atLockExit:       Result := 'LOCKEXIT';
+    atTeleportPlayer: Result := 'TELEPORTPLAYER';
+    atAddScore:       Result := 'ADDSCORE';
+    atEndGame:        Result := 'ENDGAME';
+    atEnableEvent:    Result := 'ENABLEEVENT';
+    atDisableEvent:   Result := 'DISABLEEVENT';
+  else
+    Result := 'NONE';
+  end;
+end;
+
+function ActionFromName(const S: string): TActionType;
+var
+  A: TActionType;
+  U: string;
+begin
+  U := StrUpper(S);
+  for A := Low(TActionType) to High(TActionType) do
+    if ActionName(A) = U then
+    begin
+      Result := A;
+      Exit;
+    end;
+  Result := atNone;
+end;
+
+function EncodeExitValue(Dir: TDirection; Dest: Word): SmallInt;
+begin
+  Result := SmallInt(Ord(Dir) or (Dest shl 3));
+end;
+
+procedure DecodeExitValue(V: SmallInt; var Dir: TDirection; var Dest: Word);
+var
+  D: Integer;
+begin
+  D := V and $07;
+  if D > Ord(High(TDirection)) then D := 0;
+  Dir := TDirection(D);
+  Dest := (V shr 3) and $1FFF;
+end;
+
+procedure SeedEventState(var W: TGameWorld);
+var
+  I: Integer;
+begin
+  for I := 1 to MAX_EVENTS do
+  begin
+    W.Fired[I] := False;
+    W.EvEnabled[I] := W.Events[I].Enabled;
+  end;
 end;
 
 end.

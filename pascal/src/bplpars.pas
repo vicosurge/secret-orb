@@ -11,7 +11,7 @@ uses
   SysUtils, GameData;
 
 const
-  BPL_REVISION = 3;   { Older revisions still load; new tags default to 0 }
+  BPL_REVISION = 4;   { Older revisions still load; new tags default to 0 }
   MAX_BPL_ERRORS = 50;
 
 type
@@ -181,7 +181,7 @@ end;
 function IsBlockType(const S: string): Boolean;
 begin
   Result := (S = 'WORLD') or (S = 'ROOM') or (S = 'OBJECT') or (S = 'MOB') or
-            (S = 'PARAGRAPH');
+            (S = 'PARAGRAPH') or (S = 'EVENT');
 end;
 
 { A BPL tag value is one line and cannot contain braces, so paragraph line
@@ -209,6 +209,22 @@ begin
     end;
     Inc(I);
   end;
+end;
+
+{ An event message is a single line, so it needs none of the newline escaping
+  above - but a brace in it would still end the tag early. Substituted the same
+  way EncodeParaText does it, rather than escaped, because the reader has no
+  unescaping step for ordinary tag values. }
+function EscapeBraces(const S: string): string;
+var
+  I: Integer;
+begin
+  Result := S;
+  for I := 1 to Length(Result) do
+    case Result[I] of
+      '{': Result[I] := '(';
+      '}': Result[I] := ')';
+    end;
 end;
 
 function DecodeParaText(const S: TParaText): TParaText;
@@ -332,6 +348,67 @@ begin
   if Pos('READ', Upper) > 0 then Include(Result, ofRead);
 end;
 
+{ Event tag values are comma-separated lists. A BPL tag value is one line and
+  cannot contain braces, but commas are fine, so the last field of an ACTION -
+  the message text - takes whatever follows the third comma verbatim. }
+function BPLField(var S: string): string;
+var
+  P: Integer;
+begin
+  P := Pos(',', S);
+  if P = 0 then
+  begin
+    Result := TrimStr(S);
+    S := '';
+  end
+  else
+  begin
+    Result := TrimStr(Copy(S, 1, P - 1));
+    S := Copy(S, P + 1, Length(S));
+  end;
+end;
+
+{ COND tag value: type,targetid,value,negate }
+procedure ParseBPLCondition(const Value: string; var C: TCondition);
+var
+  Rest: string;
+begin
+  Rest := Value;
+  C.CondType := ConditionFromName(BPLField(Rest));
+  C.TargetID := StrToIntDef(BPLField(Rest), 0);
+  C.Value := StrToIntDef(BPLField(Rest), 0);
+  C.Negate := StrToIntDef(BPLField(Rest), 0) <> 0;
+end;
+
+{ ACTION tag value: type,targetid,value and optionally text }
+procedure ParseBPLAction(const Value: string; var A: TAction);
+var
+  Rest: string;
+begin
+  Rest := Value;
+  A.ActionType := ActionFromName(BPLField(Rest));
+  A.TargetID := StrToIntDef(BPLField(Rest), 0);
+  A.Value := StrToIntDef(BPLField(Rest), 0);
+  A.Text := Copy(Rest, 1, MAX_EVENT_TEXT);
+end;
+
+{ FLAGNAME and COUNTERNAME tag values: number,name }
+procedure SetVarName(var W: TGameWorld; const Value: string; IsFlag: Boolean);
+var
+  Rest, Nm: string;
+  Num: Integer;
+begin
+  Rest := Value;
+  Num := StrToIntDef(BPLField(Rest), 0);
+  Nm := Copy(TrimStr(Rest), 1, MAX_VAR_NAME);
+  if IsFlag then
+  begin
+    if (Num >= 1) and (Num <= MAX_FLAGS) then W.FlagNames[Num] := Nm;
+  end
+  else
+    if (Num >= 1) and (Num <= MAX_COUNTERS) then W.CounterNames[Num] := Nm;
+end;
+
 { Raw reference text exactly as written in the file, held between the two
   passes. A reference is either a numeric ID or a VAR name, and a VAR may be
   used before the block that defines it, so none of these can be resolved while
@@ -414,6 +491,7 @@ var
   TempExits: array[TDirection] of string;
   TempFirstVisit, TempFirstTake, TempFirstTalk: Word;
   TempText: TParaText;
+  TempEvent: TWorldEvent;
   Dir: TDirection;
 begin
   Result := False;
@@ -504,6 +582,7 @@ begin
           TempFirstTake := 0;
           TempFirstTalk := 0;
           TempText := '';
+          InitEvent(TempEvent);
           for Dir := Low(TDirection) to High(TDirection) do
             TempExits[Dir] := '0';
         end;
@@ -605,6 +684,20 @@ begin
               number an author prints in the booklet is the number they wrote }
             if (TempOC >= 1) and (TempOC <= MAX_PARAGRAPHS) then
               SetParagraph(W, TempOC, DecodeParaText(TempText));
+          end
+          else if BlockType = 'EVENT' then
+          begin
+            { Keyed by an OC number like a paragraph rather than a VAR, and for a
+              stronger reason: the number is the slot, and a save game's Fired
+              bitmap is indexed by it. Events refer to rooms and objects by ID
+              and nothing refers back, so the VAR pass has nothing to fix up. }
+            if (TempOC >= 1) and (TempOC <= MAX_EVENTS) then
+            begin
+              W.Events[TempOC] := TempEvent;
+              W.Events[TempOC].Name := TempName;
+              W.Events[TempOC].Active := True;
+              if TempOC > W.EventCount then W.EventCount := TempOC;
+            end;
           end;
           InBlock := False;
           BlockType := '';
@@ -679,7 +772,40 @@ begin
         else if Tags[I].Key = 'UP' then
           TempExits[dirUp] := Tags[I].Value
         else if Tags[I].Key = 'DOWN' then
-          TempExits[dirDown] := Tags[I].Value;
+          TempExits[dirDown] := Tags[I].Value
+        { Event tags. COND and ACTION repeat and are kept in the order met. }
+        else if Tags[I].Key = 'TRIGGER' then
+          TempEvent.TriggerType := TriggerFromName(Tags[I].Value)
+        else if Tags[I].Key = 'TRIGGERID' then
+          TempEvent.TriggerID := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'TRIGGERID2' then
+          TempEvent.TriggerID2 := StrToIntDef(Tags[I].Value, 0)
+        else if Tags[I].Key = 'ONESHOT' then
+          TempEvent.OneShot := StrToIntDef(Tags[I].Value, 1) <> 0
+        else if Tags[I].Key = 'ENABLED' then
+          TempEvent.Enabled := StrToIntDef(Tags[I].Value, 1) <> 0
+        else if Tags[I].Key = 'COND' then
+        begin
+          if TempEvent.CondCount < MAX_CONDITIONS then
+          begin
+            Inc(TempEvent.CondCount);
+            ParseBPLCondition(Tags[I].Value,
+                              TempEvent.Conditions[TempEvent.CondCount]);
+          end;
+        end
+        else if Tags[I].Key = 'ACTION' then
+        begin
+          if TempEvent.ActionCount < MAX_ACTIONS then
+          begin
+            Inc(TempEvent.ActionCount);
+            ParseBPLAction(Tags[I].Value,
+                           TempEvent.Actions[TempEvent.ActionCount]);
+          end;
+        end
+        else if Tags[I].Key = 'FLAGNAME' then
+          SetVarName(W, Tags[I].Value, True)
+        else if Tags[I].Key = 'COUNTERNAME' then
+          SetVarName(W, Tags[I].Value, False);
       end;
     end;
 
@@ -757,7 +883,7 @@ end;
 function SaveWorldBPL(const FileName: string; var W: TGameWorld): Boolean;
 var
   F: Text;
-  I: Integer;
+  I, J: Integer;
   FlagStr: string;
 begin
   Result := False;
@@ -783,6 +909,12 @@ begin
             '}{LOSEPARA:', W.LosePara, '}');
   if (W.WorldFlags and WF_BOOKLET) <> 0 then
     WriteLn(F, '{BOOKLET:1}');
+  for J := 1 to MAX_FLAGS do
+    if W.FlagNames[J] <> '' then
+      WriteLn(F, '{FLAGNAME:', J, ',', W.FlagNames[J], '}');
+  for J := 1 to MAX_COUNTERS do
+    if W.CounterNames[J] <> '' then
+      WriteLn(F, '{COUNTERNAME:', J, ',', W.CounterNames[J], '}');
   WriteLn(F, '{END}');
   WriteLn(F);
 
@@ -865,6 +997,34 @@ begin
       WriteLn(F, '{REVISION:', BPL_REVISION, '}');
       WriteLn(F, '{OC:', I, '}');
       WriteLn(F, '{TEXT:', EncodeParaText(W.Paragraphs[I]), '}');
+      WriteLn(F, '{END}');
+      WriteLn(F);
+    end;
+  end;
+
+  { Write EVENT blocks. Keyed by OC like a paragraph: an event refers to rooms
+    and objects by ID and nothing refers back to it, so it needs no VAR. }
+  for I := 1 to MAX_EVENTS do
+  begin
+    if W.Events[I].Active then
+    begin
+      WriteLn(F, '{START:EVENT}');
+      WriteLn(F, '{REVISION:', BPL_REVISION, '}');
+      WriteLn(F, '{OC:', I, '}{NAME:', W.Events[I].Name, '}+++');
+      Write(F, '{TRIGGER:', TriggerName(W.Events[I].TriggerType), '}',
+               '{TRIGGERID:', W.Events[I].TriggerID, '}');
+      if W.Events[I].TriggerID2 > 0 then
+        Write(F, '{TRIGGERID2:', W.Events[I].TriggerID2, '}');
+      WriteLn(F, '{ONESHOT:', Ord(W.Events[I].OneShot), '}',
+                 '{ENABLED:', Ord(W.Events[I].Enabled), '}');
+      for J := 1 to W.Events[I].CondCount do
+        with W.Events[I].Conditions[J] do
+          WriteLn(F, '{COND:', ConditionName(CondType), ',', TargetID, ',',
+                  Value, ',', Ord(Negate), '}');
+      for J := 1 to W.Events[I].ActionCount do
+        with W.Events[I].Actions[J] do
+          WriteLn(F, '{ACTION:', ActionName(ActionType), ',', TargetID, ',',
+                  Value, ',', EscapeBraces(Text), '}');
       WriteLn(F, '{END}');
       WriteLn(F);
     end;
