@@ -58,13 +58,17 @@ tools: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/validate tools/validate.pas
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/bpldump tools/bpldump.pas
 
-# Unit tests. Both write their scratch files into the working directory and
-# delete them again, so they need no fixtures.
+# Unit tests. They write their scratch files into the working directory and
+# delete them again, so they need no fixtures. pairtest and eventtest also
+# run under FreeDOS; parsetest does not, because it links GameCore and so
+# pulls in Crt, which on DOS writes to video memory rather than to a pipe.
 test: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/pairtest tools/pairtest.pas
 	$(BINDIR)/pairtest
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/eventtest tools/eventtest.pas
 	$(BINDIR)/eventtest
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/parsetest tools/parsetest.pas
+	$(BINDIR)/parsetest
 
 # Turbo Vision editor (for game creators, not part of player distribution)
 editor-tv: $(BINDIR)

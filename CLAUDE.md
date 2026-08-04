@@ -163,13 +163,32 @@ The codebase is organized into modular units in `pascal/src/`:
     upper-cased; the noun keeps its typed case so `SAVE`/`LOAD` file names survive
     on case-sensitive filesystems
   - Command handlers: movement, examine, take, drop, use, open, read, talk,
-    inventory, save, load, score, exits, again
+    give, inventory, save, load, score, exits, again
+  - **Two verbs take two nouns**, and only those two: `USE X ON Y` (also
+    `WITH`, also `TO`) and `GIVE X TO Y` (also `ON`). `ParseCommand` splits
+    the noun on the preposition through `SplitPrep` and returns the second
+    half in `TGame.LastNoun2`; every other verb keeps its noun whole, which
+    is what stops `TALK TO WIZARD` losing its noun, `DROP TORCH ON FLOOR`
+    becoming two objects, and `SAVE game to keep.dat` losing its file name.
+    These are the only two commands that can raise `etUseObjectOn` and
+    `etGiveTo`
+  - `etUseObjectOn`'s second target is **always an object** — handing
+    something to a person is `GIVE`, which has its own trigger — so an
+    event's `TriggerID2` names an object and the validator checks it as one.
+    `USE` on a mob answers *"Try giving it to them instead."*
+  - **`GIVE` moves nothing by itself.** What a gift means is the author's
+    decision, so the transfer belongs in the event's actions; without an
+    event the object stays in hand and the mob refuses it. An item silently
+    swallowed by an NPC nobody wrote a response for could strand the game
   - `EXITS` reports the way out through `LastMessage`; `ExitsLine` is the single
     place exits are turned into prose, called by both it and `ShowRoom`
   - `AGAIN`/`G` replays `TGame.PrevCmd`. Only turn-consuming commands are
     recorded there, so `AGAIN` can never repeat itself, a save, or a help
     screen. It is resolved before dispatch, so the replayed command behaves in
-    every respect — turn count included — as if the player had retyped it
+    every respect — turn count included — as if the player had retyped it.
+    `PrevNoun2` is saved beside `PrevNoun`, or `AGAIN` after `USE KEY ON DOOR`
+    would replay the bare `USE KEY` — a different command firing a different
+    trigger
   - `LastMessage` is wrapped through `WriteWrappedMax` and bounded to the rows
     left above the prompt. Writing it unwrapped let the terminal wrap it, which
     pushed the prompt off the row `PromptY` recorded and drew `>` on top of the
@@ -456,6 +475,8 @@ Not part of any release; `make tools` and `make test` build them.
 | `tools/validate.pas` | Runs `ValidateWorld` from the shell; exits non-zero on errors |
 | `tools/bpldump.pas` | Parses a BPL file and prints resolved exits and parse errors — the only way to see VAR resolution without an editor |
 | `tools/pairtest.pas` | Unit tests for `PairExits`; run by `make test` and by CI |
+| `tools/eventtest.pas` | Unit tests for the event formats and the interpreter; runs natively **and under FreeDOS** |
+| `tools/parsetest.pas` | Unit tests for the two-noun parser, `etUseObjectOn` and `etGiveTo`. Native only: it links `GameCore`, so it pulls in `Crt`, which under DOS writes to video memory rather than to a pipe. `make dos32` deliberately does not build it |
 
 ## Compiler Flags
 
