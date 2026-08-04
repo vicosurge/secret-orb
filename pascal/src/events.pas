@@ -41,6 +41,11 @@ type
 
 procedure ClearOutcome(var O: TEventOutcome);
 
+{ True when an event left anything for gamecore to do. Asked by ApplyOutcome
+  before it drains, and by HandleGive to find out whether the world had an
+  answer of its own before it offers a default one. }
+function HasOutcome(const O: TEventOutcome): Boolean;
+
 { Fires every event matching the trigger, in ascending slot order. All of them
   fire, not just the first - which is how an author writes more than
   MAX_ACTIONS actions for one trigger: two events with the same trigger. }
@@ -67,6 +72,12 @@ begin
   O.Points := 0;
   O.Ending := ekNone;
   O.Teleport := 0;
+end;
+
+function HasOutcome(const O: TEventOutcome): Boolean;
+begin
+  Result := (O.Message <> '') or (O.ParaCount > 0) or (O.Points > 0) or
+            (O.Ending <> ekNone) or (O.Teleport <> 0);
 end;
 
 procedure QueuePara(var O: TEventOutcome; Num: Word);

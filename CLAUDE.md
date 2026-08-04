@@ -63,11 +63,16 @@ things about that build are load-bearing and easy to trip over:
 
 `make dos32` builds **`secorb.pas`**, not `secretorb.pas` — the 8.3-named duplicate
 is what ships on DOS, which is the other reason the two files must stay identical.
-It also builds `VALIDATE.EXE`, `CONVERT.EXE` and `PAIRTEST.EXE`, which are not part
-of the distribution: they are what `make dos-test` runs inside FreeDOS. Those three
-are plain `WriteLn` programs, so DOS output redirection captures them; the game and
-the editor use `Crt`, which writes to video memory and reads the BIOS keyboard, and
-cannot be driven through a pipe at all.
+It also builds `VALIDATE.EXE`, `CONVERT.EXE`, `PAIRTEST.EXE` and `EVENTTST.EXE`,
+which are not part of the distribution: they are what `make dos-test` runs inside
+FreeDOS, comparing each one's output against the native run. Those four are plain
+`WriteLn` programs, so DOS output redirection captures them; the game and the
+editor use `Crt`, which writes to video memory and reads the BIOS keyboard, and
+cannot be driven through a pipe at all. `EVENTTST.EXE` is the only way any of the
+*engine* is exercised under DOS — `events.pas` uses `GameData` and nothing else,
+which is what makes it drivable from a console program. Its scratch files carry
+8.3 names for the same reason: the volume it runs on is FAT, and the kernel need
+not support long ones.
 
 `make dos-dist` builds a real 720KB FAT12 floppy image alongside the zip. That is
 the size constraint as a build step rather than a warning: if the distribution
@@ -132,6 +137,19 @@ The codebase is organized into modular units in `pascal/src/`:
     that is either a deliberate one-way link or a mistake the validator reports.
     Both Pascal editors and the browser editor's *Link back* button behave the
     same way
+  - `CheckEvents` is the largest of these checks, because events are where the
+    mistake this unit exists for is most available: everything an event names
+    is a number, and a number naming nothing is invisible at run time —
+    `FireEvents` skips a trigger that never matches and `RunActions` skips an
+    action whose target is not there, both without a word. Its rules follow
+    `events.pas` exactly and have to be read with it. Three of the
+    interpreter's conventions drive them:
+    - a `TriggerID` of 0 means **any**, so an author can write one event for
+      every object; it is not a missing reference
+    - a `TriggerID2` set on a trigger whose hook passes 0 can never match, so
+      the event is *dead* — an error, not a warning
+    - `FireEvents` stops at `EventCount`, so an active event above it is dead
+      too
   - `WriteParaXRef` writes the author's cross-reference (see below)
   - `secretorb.pas` must not list this unit in `uses`. The game runs from a
     720KB floppy and has no business carrying authoring checks
@@ -163,13 +181,32 @@ The codebase is organized into modular units in `pascal/src/`:
     upper-cased; the noun keeps its typed case so `SAVE`/`LOAD` file names survive
     on case-sensitive filesystems
   - Command handlers: movement, examine, take, drop, use, open, read, talk,
-    inventory, save, load, score, exits, again
+    give, inventory, save, load, score, exits, again
+  - **Two verbs take two nouns**, and only those two: `USE X ON Y` (also
+    `WITH`, also `TO`) and `GIVE X TO Y` (also `ON`). `ParseCommand` splits
+    the noun on the preposition through `SplitPrep` and returns the second
+    half in `TGame.LastNoun2`; every other verb keeps its noun whole, which
+    is what stops `TALK TO WIZARD` losing its noun, `DROP TORCH ON FLOOR`
+    becoming two objects, and `SAVE game to keep.dat` losing its file name.
+    These are the only two commands that can raise `etUseObjectOn` and
+    `etGiveTo`
+  - `etUseObjectOn`'s second target is **always an object** — handing
+    something to a person is `GIVE`, which has its own trigger — so an
+    event's `TriggerID2` names an object and the validator checks it as one.
+    `USE` on a mob answers *"Try giving it to them instead."*
+  - **`GIVE` moves nothing by itself.** What a gift means is the author's
+    decision, so the transfer belongs in the event's actions; without an
+    event the object stays in hand and the mob refuses it. An item silently
+    swallowed by an NPC nobody wrote a response for could strand the game
   - `EXITS` reports the way out through `LastMessage`; `ExitsLine` is the single
     place exits are turned into prose, called by both it and `ShowRoom`
   - `AGAIN`/`G` replays `TGame.PrevCmd`. Only turn-consuming commands are
     recorded there, so `AGAIN` can never repeat itself, a save, or a help
     screen. It is resolved before dispatch, so the replayed command behaves in
-    every respect — turn count included — as if the player had retyped it
+    every respect — turn count included — as if the player had retyped it.
+    `PrevNoun2` is saved beside `PrevNoun`, or `AGAIN` after `USE KEY ON DOOR`
+    would replay the bare `USE KEY` — a different command firing a different
+    trigger
   - `LastMessage` is wrapped through `WriteWrappedMax` and bounded to the rows
     left above the prompt. Writing it unwrapped let the terminal wrap it, which
     pushed the prompt off the row `PromptY` recorded and drew `>` on top of the
@@ -291,8 +328,8 @@ paragraph blob. No room, object or mob record changes, so `ReadBinaryV2Or3`
 absorbs v4 with one `if Version >= 4` and the dispatch reads `2, 3, 4:`.
 
 ```
-Word  EventCount                { records that follow }
-repeat EventCount times:
+Word  nEvents                   { records that follow - NOT the highest slot }
+repeat nEvents times:
   Word  Size                    { bytes after this field }
   Word  Number                  { the slot, 1..MAX_EVENTS }
   Byte  NameLen ; Byte[NameLen] Name
@@ -323,7 +360,14 @@ and `atEnableEvent`/`atDisableEvent` name a slot, so compacting on save would
 silently repoint every existing save at the wrong events. Because each record
 carries its own number, a gap costs *nothing* here, where a deleted paragraph
 still costs its two-byte zero length. `TWorldEvent` therefore has no `ID`
-field, and `EventCount` is the highest used slot, not a count of active ones.
+field.
+
+Two different numbers are easy to confuse here. **In memory**,
+`TGameWorld.EventCount` is the highest used slot — `FireEvents` walks
+`1..EventCount` and stops, so an active event above it never fires, which is
+why the validator checks for one. **On disk**, the leading `Word` is the
+number of records that follow, gaps skipped, because each record names its own
+slot. The two are equal only in a world with no gaps.
 
 Enum fields go on disk as explicit `Byte` ordinals, never as the enum types: an
 FPC enum is four bytes by default and its width is a compiler setting, so
@@ -456,6 +500,9 @@ Not part of any release; `make tools` and `make test` build them.
 | `tools/validate.pas` | Runs `ValidateWorld` from the shell; exits non-zero on errors |
 | `tools/bpldump.pas` | Parses a BPL file and prints resolved exits and parse errors — the only way to see VAR resolution without an editor |
 | `tools/pairtest.pas` | Unit tests for `PairExits`; run by `make test` and by CI |
+| `tools/eventtest.pas` | Unit tests for the event formats and the interpreter; runs natively **and under FreeDOS** |
+| `tools/parsetest.pas` | Unit tests for the two-noun parser, `etUseObjectOn` and `etGiveTo`. Native only: it links `GameCore`, so it pulls in `Crt`, which under DOS writes to video memory rather than to a pipe. `make dos32` deliberately does not build it |
+| `tools/webformat.js` | Round-trips a world through `web/editor.html`'s own reader and writer under Node, then makes the Pascal agree byte for byte. Run by `make webtest`; the only tool here that is not Pascal |
 
 ## Compiler Flags
 
@@ -476,6 +523,13 @@ Target-specific:
 The DOS build also passes `-FUbin/dos/units`. go32v2 and native unit files share
 their names and differ by architecture, so without a separate output directory
 `make native` after `make dos32` would trip over the wrong `.ppu` files.
+
+The tools and tests build through `TOOLFLAGS`, which adds `-FUbin/obj` for the
+same class of reason. `bin` is an output directory and so a unit search path,
+and `tools/validate.pas` leaves a `validate.o` in it — **Turbo Vision has a
+unit of that name**. Build the tools and then `editor-tv` without this and the
+linker picks ours, failing with an undefined reference to `TValidator.Valid`
+that says nothing at all about the cause.
 
 ## Size Constraints
 
@@ -532,12 +586,27 @@ make editors     # Builds both editors
 There is also **web/editor.html**: a single self-contained HTML file (no build step,
 no dependencies, no network access) served from the project site at
 `/web/editor.html`. It reads and writes all three world formats, so its byte layout
-for binary v3 must stay in step with the packed records in `datafile.pas` — the
+for binary v4 must stay in step with the packed records in `datafile.pas` — the
 record sizes and field offsets are written down in comments next to its
 `writeBinary` function, and any drift garbles every record. It also carries a browser
 copy of the engine's command handling for playtesting, which mirrors `gamecore.pas`
-(including `showParagraph`, the browser twin of `ShowParagraph`), plus a Story tab
-and a printable HTML booklet export.
+(including `showParagraph`, the browser twin of `ShowParagraph`, and `fireEvents`,
+the twin of `FireEvents` — bounded the same four ways, so a world that misbehaves
+in one misbehaves in the other), plus Story and Events tabs and a printable HTML
+booklet export. The playtest keeps its own copy of the room exits for the same
+reason save version 3 stores them: `LOCKEXIT` makes them mutable, and a test run
+must not edit the author's world.
+
+Because the page has no build step and no test framework, that contract is
+checked from outside it: `pascal/tools/webformat.js` pulls the model and format
+half of the page's script out of the HTML — everything above the
+`/* ---- Events ---` comment that begins the DOM wiring — evaluates it under
+Node, and round-trips a world through all three formats. `make webtest` then
+hands the binary it wrote to `bin/validate` and `bin/converter`: the Pascal
+side has to accept it *and* rewrite it byte for byte. That is what makes a
+layout drift fail a build rather than corrupt an author's world. `make test`
+runs it, and skips with a loud message where Node is not installed — Node is a
+test-only dependency and nothing shipped needs it.
 
 The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provides:
 - Menu bar with keyboard shortcuts (F2 Save, F3 Open, Alt+X Exit)
@@ -547,6 +616,11 @@ The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provid
 - A Story menu with a `PMemo`-based paragraph editor and booklet export. This is the
   only place the `Editors` unit is used; `editor-tv` is excluded from the `dos32`,
   `dos` and `win32` targets, so that dependency never reaches those builds.
+- An Events menu. A Turbo Vision dialog cannot relabel itself, so the type is
+  chosen first from a picker and the dialog is then *built* for that type,
+  asking only for the fields it uses. `PickIndex` is the one picker all three
+  enums share. Note that its parameter is `Preselect`, not `Current`:
+  `TGroup` has a field of that name and it wins inside a `with Dialog^` block
 
 The lightweight `editor.pas` edits a paragraph as a `MAX_PARA_LINES` × 74 grid of
 `ReadLine` calls joined with `#13#10`, because it has no multi-line control. All
@@ -562,6 +636,26 @@ the Pascal side and by equivalent functions in `web/editor.html`:
 | Validate world | `V` on the main menu | World ▸ Validate | Check tab |
 | Auto-connect exits | prompt on F2-save of a room | prompt on room OK | *Link back* button |
 | Paragraph cross-reference | `R` in the paragraph list | Story ▸ Export cross-reference | *Cross-ref* button |
+| Event authoring | **read-only list**, `E` on the main menu | Events ▸ List / Add | Events tab |
+
+Event authoring is the one row where the three editors deliberately differ.
+`editor.pas` ships on the 720KB floppy beside the game, and a condition and
+action list needs more screen and more control than a 25-row `Crt` form has —
+so there it is a **read-only list with delete and an enable toggle**, which is
+what an author needs while playing with a world on a DOS box: see what exists,
+turn one off to bisect a world that misbehaves, remove one. Writing them is
+`editor-tv.pas` and `web/editor.html`, neither of which has a size budget.
+
+What that authoring UI is really for is keeping an author from having to know
+the encodings. Which of a trigger's two IDs means what changes with the
+trigger, and `atLockExit` packs a direction and a destination into one
+`SmallInt`. Both editors label their fields from the type in hand — "Object
+ID", "Flag number", a direction picker — and the web editor goes further and
+makes every entity reference a picker, so a reference that does not exist is a
+thing you cannot type rather than something the Check tab tells you about
+later. Where a trigger's second ID is one the engine always passes as 0, the
+field is hidden rather than shown empty: filling it in would make the event
+dead.
 
 The cross-reference is **a separate file from the booklet, deliberately**. The
 booklet is what the player is handed; a list of what fires each paragraph would

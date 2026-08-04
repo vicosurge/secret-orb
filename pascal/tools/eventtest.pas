@@ -6,13 +6,17 @@
 
   Covers the parts of the event system with no other regression cover: the
   binary v4 round-trip, save v3 round-trip, and backward compatibility with
-  worlds and saves written before events existed. }
+  worlds and saves written before events existed.
+
+  Its scratch files are 8.3 names on purpose. They are written into the
+  working directory and deleted again, and the working directory under the
+  DOS test run is a FAT volume whose kernel need not support long names. }
 program EventTest;
 
 {$MODE OBJFPC}
 
 uses
-  SysUtils, GameData, DataFile, Events;
+  SysUtils, GameData, DataFile, Events, WorldVal;
 
 var
   Failures: Integer = 0;
@@ -131,7 +135,7 @@ var
   Path: string;
 begin
   Heading('Binary v4 carries events, flag names and counter names');
-  Path := 'eventtest-w.dat';
+  Path := 'EVW.DAT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -185,8 +189,8 @@ var
   NA, NB: Integer;
 begin
   Heading('Saving the same world twice yields identical bytes');
-  A := 'eventtest-a.dat';
-  B := 'eventtest-b.dat';
+  A := 'EVA.DAT';
+  B := 'EVB.DAT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -211,8 +215,8 @@ var
   SizeBare, SizeEvt: LongInt;
 begin
   Heading('A world with no events costs only the three section counts');
-  Bare := 'eventtest-bare.dat';
-  Evt := 'eventtest-evt.dat';
+  Bare := 'EVBARE.DAT';
+  Evt := 'EVEVT.DAT';
 
   BuildWorld(W);
   SaveWorld(Bare, W);
@@ -245,7 +249,7 @@ var
 begin
   Heading('Save v3 carries flags, counters and fired events');
   Path := 'eventtest.sav';
-  WPath := 'eventtest-s.dat';
+  WPath := 'EVS.DAT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -291,7 +295,7 @@ var
   Path: string;
 begin
   Heading('Text format carries events');
-  Path := 'eventtest.txt';
+  Path := 'EV.TXT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -339,7 +343,7 @@ var
   Path: string;
 begin
   Heading('BPL revision 4 carries events');
-  Path := 'eventtest.bpl';
+  Path := 'EV.BPL';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -384,7 +388,7 @@ var
   Path: string;
 begin
   Heading('A world with no events loads with clean event state');
-  Path := 'eventtest-old.dat';
+  Path := 'EVOLD.DAT';
 
   BuildWorld(W);
   SaveWorld(Path, W);
@@ -729,6 +733,223 @@ begin
   Check('both fired, low slot first', O.Message = 'first second');
 end;
 
+{ ---- Validation ---------------------------------------------------------
+
+  Everything an event names is a number, and a wrong number is invisible at
+  run time - the interpreter skips what it cannot resolve without a word.
+  These tests are the reason worldval.pas checks events at all, so each one
+  names the mistake it is standing in for. }
+
+{ Runs the validator and says whether any issue mentions Frag }
+function Reports(var W: TGameWorld; const Frag: string): Boolean;
+var
+  List: TIssueList;
+  N, I: Integer;
+begin
+  Result := False;
+  N := ValidateWorld(W, List);
+  for I := 1 to N do
+    if Pos(Frag, List[I].Text) > 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+function ErrorCount(var W: TGameWorld): Integer;
+var
+  List: TIssueList;
+  N, I: Integer;
+begin
+  Result := 0;
+  N := ValidateWorld(W, List);
+  for I := 1 to N do
+    if List[I].Level = ilError then Inc(Result);
+end;
+
+{ A world with one event in slot 1, named and enabled, with room 1 as its
+  trigger and one harmless action. Tests spoil one field at a time. }
+procedure BuildEventWorld(var W: TGameWorld);
+begin
+  BuildWorld(W);
+  W.WinRoomID := 2;                 { or every check trips the no-win warning }
+  InitEvent(W.Events[1]);
+  W.Events[1].Name := 'Arrival';
+  W.Events[1].TriggerType := etEnterRoom;
+  W.Events[1].TriggerID := 1;
+  W.Events[1].ActionCount := 1;
+  W.Events[1].Actions[1].ActionType := atShowMessage;
+  W.Events[1].Actions[1].Text := 'Something stirs.';
+  W.Events[1].Active := True;
+  W.EventCount := 1;
+  SeedEventState(W);
+end;
+
+procedure TestValidation;
+var
+  W: TGameWorld;
+begin
+  Heading('Validation catches what the interpreter passes over in silence');
+
+  BuildEventWorld(W);
+  CheckInt('a sound event reports no errors', ErrorCount(W), 0);
+
+  { A trigger on a room that was deleted afterwards }
+  BuildEventWorld(W);
+  W.Events[1].TriggerID := 99;
+  Check('a trigger naming a missing room', Reports(W, 'names room 99'));
+
+  { etEnterRoom's hook passes 0 as the second ID, so a TriggerID2 set here
+    can never match and the event is dead rather than merely narrow }
+  BuildEventWorld(W);
+  W.Events[1].TriggerID2 := 2;
+  Check('a second ID on a trigger that has none',
+        Reports(W, 'never fires'));
+
+  { The timer hook runs after the turn counter is incremented, so turn 0
+    never arrives; with no repeat period either, the event waits forever }
+  BuildEventWorld(W);
+  W.Events[1].TriggerType := etTimer;
+  W.Events[1].TriggerID := 0;
+  W.Events[1].TriggerID2 := 0;
+  Check('a timer set to turn 0 with no period',
+        Reports(W, 'never fires'));
+
+  { The mistake CheckPara exists for, now reachable from an action }
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atShowParagraph;
+  W.Events[1].Actions[1].TargetID := 5;
+  Check('an action naming an empty paragraph', Reports(W, 'which is empty'));
+
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].Text := '';
+  Check('an action showing an empty message',
+        Reports(W, 'empty message'));
+
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atSetFlag;
+  W.Events[1].Actions[1].TargetID := MAX_FLAGS + 1;
+  Check('a flag number past the end', Reports(W, 'flags run 1 to'));
+
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atAddCounter;
+  W.Events[1].Actions[1].TargetID := 0;
+  Check('counter 0, which does not exist', Reports(W, 'counters run 1 to'));
+
+  { Slot numbers are identity, so naming an empty one is a live risk }
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atEnableEvent;
+  W.Events[1].Actions[1].TargetID := 9;
+  Check('an action enabling an empty slot', Reports(W, 'empty slot'));
+
+  { The direction rides in the low three bits of Value, which can hold 6 and
+    7. DecodeExitValue clamps those to north rather than crashing, so the
+    author gets the wrong door locked and no message. }
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atLockExit;
+  W.Events[1].Actions[1].TargetID := 1;
+  W.Events[1].Actions[1].Value := 6;
+  Check('an exit action with no such direction',
+        Reports(W, 'not a direction'));
+
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atUnlockExit;
+  W.Events[1].Actions[1].TargetID := 1;
+  W.Events[1].Actions[1].Value := EncodeExitValue(dirNorth, 99);
+  Check('an unlock onto a room that does not exist',
+        Reports(W, 'names room 99'));
+
+  { FireEvents walks slots 1..EventCount and stops }
+  BuildEventWorld(W);
+  W.Events[4] := W.Events[1];
+  Check('an active event above the event count',
+        Reports(W, 'above the event count'));
+
+  BuildEventWorld(W);
+  W.Events[1].Enabled := False;
+  SeedEventState(W);
+  Check('an event that starts disabled with nothing to enable it',
+        Reports(W, 'starts disabled'));
+
+  { The event equivalent of an unreachable room }
+  BuildEventWorld(W);
+  W.Events[1].TriggerType := etFlagSet;
+  W.Events[1].TriggerID := 3;
+  Check('a flag trigger no action ever writes',
+        Reports(W, 'no action ever writes'));
+
+  { ...and the same event once something does set the flag }
+  W.Events[2] := W.Events[1];
+  W.Events[2].TriggerType := etEnterRoom;
+  W.Events[2].TriggerID := 1;
+  W.Events[2].Actions[1].ActionType := atSetFlag;
+  W.Events[2].Actions[1].TargetID := 3;
+  W.EventCount := 2;
+  SeedEventState(W);
+  Check('and stays quiet once one does',
+        not Reports(W, 'no action ever writes'));
+end;
+
+{ An atShowParagraph action is the seventh way to reach a paragraph and the
+  only one that is not a field on an entity. If the cross-reference does not
+  know about it, every event-fired paragraph is reported as an orphan - and
+  "fired by: NOTHING" is the one line in that file an author acts on. }
+{ Reads the file back looking for one line containing Frag. Line by line
+  rather than into one buffer: these units compile with short strings on, so
+  a whole file accumulated into a "string" would be cut at 255 characters. }
+function FileHasLine(const Path, Frag: string): Boolean;
+var
+  F: Text;
+  Line: string;
+begin
+  Result := False;
+  Assign(F, Path);
+  {$I-}
+  Reset(F);
+  {$I+}
+  if IOResult <> 0 then Exit;
+  while not Eof(F) do
+  begin
+    ReadLn(F, Line);
+    if Pos(Frag, Line) > 0 then Result := True;
+  end;
+  Close(F);
+end;
+
+procedure TestParaXRefKnowsEvents;
+var
+  W: TGameWorld;
+  Path: string;
+begin
+  Heading('The paragraph cross-reference names event actions');
+
+  Path := 'EVX.TXT';
+  BuildEventWorld(W);
+  SetParagraph(W, 3, 'The floor gives way beneath you.');
+  W.ParaCount := 3;
+  W.Events[1].Actions[1].ActionType := atShowParagraph;
+  W.Events[1].Actions[1].TargetID := 3;
+  W.Events[1].Actions[1].Text := '';
+
+  Check('the cross-reference is written', WriteParaXRef(Path, W));
+  Check('paragraph 3 is credited to the event',
+        FileHasLine(Path, 'fired by: event 1'));
+  Check('and is not called an orphan',
+        not FileHasLine(Path, 'NOTHING'));
+
+  { The other half: an action naming a slot with no text says nothing at all
+    at run time, so this file is where the author finds it }
+  BuildEventWorld(W);
+  W.Events[1].Actions[1].ActionType := atShowParagraph;
+  W.Events[1].Actions[1].TargetID := 9;
+  W.Events[1].Actions[1].Text := '';
+  Check('the cross-reference is rewritten', WriteParaXRef(Path, W));
+  Check('an action naming an empty slot is listed',
+        FileHasLine(Path, 'Event 1 action 1 names paragraph 9'));
+
+  DeleteFile(Path);
+end;
+
 begin
   WriteLn('Secret Orb event system tests');
   WriteLn('=============================');
@@ -749,6 +970,9 @@ begin
   TestTimer;
   TestCascadeTerminates;
   TestAllMatchingEventsFire;
+
+  TestValidation;
+  TestParaXRefKnowsEvents;
 
   WriteLn;
   if Failures = 0 then

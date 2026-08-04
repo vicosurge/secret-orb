@@ -23,6 +23,7 @@ type
     cmdOpen,
     cmdRead,
     cmdTalk,
+    cmdGive,
     cmdInventory,
     cmdSave,
     cmdLoad,
@@ -38,12 +39,19 @@ type
     State: TGameState;
     LastMessage: string;
     LastNoun: string[40];
+    { The second noun of USE X ON Y and GIVE X TO Y, empty for every other
+      command. Only those two verbs are split on a preposition - see
+      SplitPrep - so TALK TO WIZARD keeps its noun in one piece. }
+    LastNoun2: string[40];
     PromptY: Integer;       { Set by ShowRoom so input lands on the drawn prompt }
     SaveFile: string;
     { What AGAIN repeats. Only turn-consuming commands are recorded, so AGAIN
-      never repeats itself and never replays a save or a help screen. }
+      never repeats itself and never replays a save or a help screen. Both
+      nouns are kept, or AGAIN after USE KEY ON DOOR would silently replay
+      the bare USE KEY. }
     PrevCmd: TCommandType;
     PrevNoun: string[40];
+    PrevNoun2: string[40];
     { What the events fired by the command in hand want to say or do. Filled
       by the hooks in the handlers, drained by RunGame at a scene boundary -
       a paragraph clears the screen, so it cannot be shown from inside a
@@ -54,14 +62,15 @@ type
 procedure InitGame(var G: TGame);
 function LoadGame(var G: TGame; const FileName: string): Boolean;
 procedure RunGame(var G: TGame);
-function ParseCommand(const Input: string; var Noun: string): TCommandType;
+function ParseCommand(const Input: string; var Noun, Noun2: string): TCommandType;
 procedure ExecuteCommand(var G: TGame; Cmd: TCommandType);
 procedure ShowRoom(var G: TGame);
 procedure ShowHelp;
 procedure HandleExamine(var G: TGame; const Noun: string);
 procedure HandleTake(var G: TGame; const Noun: string);
 procedure HandleDrop(var G: TGame; const Noun: string);
-procedure HandleUse(var G: TGame; const Noun: string);
+procedure HandleUse(var G: TGame; const Noun, Noun2: string);
+procedure HandleGive(var G: TGame; const Noun, Noun2: string);
 procedure HandleOpen(var G: TGame; const Noun: string);
 procedure HandleRead(var G: TGame; const Noun: string);
 procedure HandleTalk(var G: TGame; const Noun: string);
@@ -82,10 +91,12 @@ begin
   G.State := gsPlaying;
   G.LastMessage := '';
   G.LastNoun := '';
+  G.LastNoun2 := '';
   G.PromptY := 14;
   G.SaveFile := DEFAULT_SAVE;
   G.PrevCmd := cmdNone;
   G.PrevNoun := '';
+  G.PrevNoun2 := '';
   ClearOutcome(G.Pending);
 end;
 
@@ -135,13 +146,32 @@ begin
   Result := Copy(S, I, J - I + 1);
 end;
 
-function ParseCommand(const Input: string; var Noun: string): TCommandType;
+{ Splits "KEY ON DOOR" into "KEY" and "DOOR" at the first occurrence of Prep.
+  Only USE and GIVE go through here. Splitting every noun would break
+  TALK TO WIZARD, whose noun is one thing with a preposition glued to the
+  front - and DROP THE TORCH ON THE FLOOR, which names one object. The
+  search is on an upper-cased copy, which is the same length, so the
+  positions still index the original and the noun keeps its typed case. }
+function SplitPrep(var Noun, Noun2: string; const Prep: string): Boolean;
+var
+  P: Integer;
+begin
+  Result := False;
+  P := Pos(Prep, UpperCase(Noun));
+  if P <= 0 then Exit;
+  Noun2 := Trim(Copy(Noun, P + Length(Prep), Length(Noun)));
+  Noun := Trim(Copy(Noun, 1, P - 1));
+  Result := True;
+end;
+
+function ParseCommand(const Input: string; var Noun, Noun2: string): TCommandType;
 var
   Cmd, FullCmd: string;
   SpacePos: Integer;
 begin
   FullCmd := Trim(Input);
   Noun := '';
+  Noun2 := '';
 
   { Find first word. Only the verb is upper-cased - the noun keeps the case it
     was typed in, because SAVE and LOAD take a file name. }
@@ -193,6 +223,8 @@ begin
     Result := cmdRead
   else if (Cmd = 'TALK') or (Cmd = 'SAY') or (Cmd = 'SPEAK') then
     Result := cmdTalk
+  else if (Cmd = 'GIVE') or (Cmd = 'OFFER') then
+    Result := cmdGive
   else if (Cmd = 'I') or (Cmd = 'INV') or (Cmd = 'INVENTORY') then
     Result := cmdInventory
   else if Cmd = 'SAVE' then
@@ -209,6 +241,22 @@ begin
     Result := cmdNone
   else
     Result := cmdUnknown;
+
+  { The only two verbs that take a second object. ON and WITH are the same
+    thing to the engine; an author writes one event and both spellings reach
+    it. TO is accepted for USE as well, because USE COIN TO SLOT reads
+    naturally enough that a player will try it. }
+  case Result of
+    cmdUse:
+      if not SplitPrep(Noun, Noun2, ' ON ') then
+        if not SplitPrep(Noun, Noun2, ' WITH ') then
+          SplitPrep(Noun, Noun2, ' TO ');
+    cmdGive:
+      if not SplitPrep(Noun, Noun2, ' TO ') then
+        SplitPrep(Noun, Noun2, ' ON ');
+  else
+    ;
+  end;
 end;
 
 { Every trigger site goes through here, so the queue is the only way an event
@@ -351,6 +399,7 @@ begin
     end;
     Cmd := G.PrevCmd;
     G.LastNoun := G.PrevNoun;
+    G.LastNoun2 := G.PrevNoun2;
   end;
 
   case Cmd of
@@ -366,10 +415,11 @@ begin
     cmdExamine: HandleExamine(G, G.LastNoun);
     cmdTake: HandleTake(G, G.LastNoun);
     cmdDrop: HandleDrop(G, G.LastNoun);
-    cmdUse: HandleUse(G, G.LastNoun);
+    cmdUse: HandleUse(G, G.LastNoun, G.LastNoun2);
     cmdOpen: HandleOpen(G, G.LastNoun);
     cmdRead: HandleRead(G, G.LastNoun);
     cmdTalk: HandleTalk(G, G.LastNoun);
+    cmdGive: HandleGive(G, G.LastNoun, G.LastNoun2);
     cmdInventory: HandleInventory(G);
     cmdSave: HandleSave(G, G.LastNoun);
     cmdLoad: HandleLoad(G, G.LastNoun);
@@ -391,6 +441,7 @@ begin
       Inc(G.World.Turns);
       G.PrevCmd := Cmd;
       G.PrevNoun := G.LastNoun;
+      G.PrevNoun2 := G.LastNoun2;
       { Inside this branch on purpose: a timer inherits the meta-command
         exclusion above for free, so HELP, SCORE, SAVE, LOAD and EXITS do not
         advance the clock. That is the whole argument for hooking here rather
@@ -525,10 +576,12 @@ begin
   WriteAt(5, 14, 'TAKE <object>    - Pick up an object');
   WriteAt(5, 15, 'DROP <object>    - Drop an object');
   WriteAt(5, 16, 'USE <object>     - Use an object');
-  WriteAt(5, 17, 'OPEN <object>    - Open an object');
-  WriteAt(5, 18, 'READ <object>    - Read an object');
-  WriteAt(5, 19, 'TALK <person>    - Talk to someone');
-  WriteAt(5, 20, 'I, INVENTORY     - Show inventory');
+  WriteAt(5, 17, 'USE <a> ON <b>   - Use one thing on another');
+  WriteAt(5, 18, 'OPEN <object>    - Open an object');
+  WriteAt(5, 19, 'READ <object>    - Read an object');
+  WriteAt(5, 20, 'TALK <person>    - Talk to someone');
+  WriteAt(5, 21, 'GIVE <a> TO <b>  - Offer something to someone');
+  WriteAt(5, 22, 'I, INVENTORY     - Show inventory');
 
   WriteAt(43, 4, 'Other:');
   WriteAt(45, 5, 'L, LOOK   - Look around');
@@ -685,9 +738,9 @@ begin
   Fire(G, etDropObject, G.World.Objects[ObjIdx].ID, 0);
 end;
 
-procedure HandleUse(var G: TGame; const Noun: string);
+procedure HandleUse(var G: TGame; const Noun, Noun2: string);
 var
-  ObjIdx: Integer;
+  ObjIdx, TgtIdx: Integer;
 begin
   if Noun = '' then
   begin
@@ -710,12 +763,84 @@ begin
     Exit;
   end;
 
+  { USE X ON Y. The second target is always an object - handing something to
+    a person is GIVE, which has its own trigger - so an event's TriggerID2
+    names an object and the validator can check it as one. }
+  if Noun2 <> '' then
+  begin
+    TgtIdx := FindObjectVisible(G.World, G.World.CurrentRoom, Noun2);
+    if TgtIdx < 0 then
+    begin
+      if FindMobByName(G.World, G.World.CurrentRoom, Noun2) > 0 then
+        G.LastMessage := 'Try giving it to them instead.'
+      else
+        G.LastMessage := 'You don''t see that here.';
+      Exit;
+    end;
+
+    { No UseText: that line describes using the object on its own, and
+      printing it here would contradict whatever the event goes on to say.
+      An event with nothing to say leaves the flat report standing. }
+    G.LastMessage := 'You use the ' + G.World.Objects[ObjIdx].Name +
+                     ' on the ' + G.World.Objects[TgtIdx].Name + '.';
+    Fire(G, etUseObjectOn, G.World.Objects[ObjIdx].ID,
+         G.World.Objects[TgtIdx].ID);
+    Exit;
+  end;
+
   if G.World.Objects[ObjIdx].UseText <> '' then
     G.LastMessage := G.World.Objects[ObjIdx].UseText
   else
     G.LastMessage := 'You use the ' + G.World.Objects[ObjIdx].Name + '.';
 
   Fire(G, etUseObject, G.World.Objects[ObjIdx].ID, 0);
+end;
+
+{ GIVE moves nothing by itself. What handing an item over means is the
+  author's decision - the mob may take it, swap it, or refuse - so the
+  transfer belongs in the event's actions. Without an event the object stays
+  in the player's hands, which is the safe way to be wrong: an item silently
+  swallowed by an NPC nobody wrote a response for could strand the game. }
+procedure HandleGive(var G: TGame; const Noun, Noun2: string);
+var
+  ObjIdx, MobIdx: Integer;
+begin
+  if Noun = '' then
+  begin
+    G.LastMessage := 'Give what?';
+    Exit;
+  end;
+
+  { Inventory only - you cannot hand over what you are not holding }
+  ObjIdx := FindObjectInInventory(G.World, Noun);
+  if ObjIdx < 0 then
+  begin
+    G.LastMessage := 'You don''t have that.';
+    Exit;
+  end;
+
+  if Noun2 = '' then
+  begin
+    G.LastMessage := 'Give the ' + G.World.Objects[ObjIdx].Name + ' to whom?';
+    Exit;
+  end;
+
+  MobIdx := FindMobByName(G.World, G.World.CurrentRoom, Noun2);
+  if MobIdx < 0 then
+  begin
+    G.LastMessage := 'There''s no one here by that name.';
+    Exit;
+  end;
+
+  Fire(G, etGiveTo, G.World.Objects[ObjIdx].ID, G.World.Mobs[MobIdx].ID);
+
+  { Left empty when an event answered, so its message stands on its own
+    rather than following a refusal the author has just overridden }
+  if HasOutcome(G.Pending) then
+    G.LastMessage := ''
+  else
+    G.LastMessage := G.World.Mobs[MobIdx].Name + ' does not want the ' +
+                     G.World.Objects[ObjIdx].Name + '.';
 end;
 
 procedure HandleOpen(var G: TGame; const Noun: string);
@@ -874,9 +999,7 @@ var
   Idx: Integer;
   O: TEventOutcome;
 begin
-  if (G.Pending.Message = '') and (G.Pending.ParaCount = 0) and
-     (G.Pending.Points = 0) and (G.Pending.Ending = ekNone) and
-     (G.Pending.Teleport = 0) then Exit;
+  if not HasOutcome(G.Pending) then Exit;
 
   { Taken by value and cleared first: a teleport re-enters EnterRoom, which
     can fire more events into G.Pending, and those belong to the next drain
@@ -940,7 +1063,7 @@ begin
   begin
     ShowRoom(G);
     Input := ReadLine(3, G.PromptY, 60);
-    Cmd := ParseCommand(Input, G.LastNoun);
+    Cmd := ParseCommand(Input, G.LastNoun, G.LastNoun2);
     ExecuteCommand(G, Cmd);
     ApplyOutcome(G);
   end;

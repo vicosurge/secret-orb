@@ -54,39 +54,26 @@ direction, which is usually enough to find it.
 
 ---
 
-## 3. The event system is engine-only so far
+## 3. `atMoveObject` can only move an object to a room
 
-**Where:** `pascal/src/events.pas` is written and wired; the authoring and
-checking sides are not.
+**Where:** `pascal/src/events.pas`, `RunActions`
 
-The binary v4 / save v3 / text / BPL formats all carry events, and the
-interpreter runs them, but three pieces of the design are still missing:
+The action sets `RoomID := Word(Value)` and clears `CarriedBy`, so `Value` is
+always a room. The design doc's own wording is "move object to room/inventory/
+mob", and its worked example — the wizard handing over an amulet — needs the
+inventory case. There is no way to express either today, which is also why
+`GIVE` leaves the transfer to the author and the author cannot then write it.
 
-- **`etUseObjectOn` and `etGiveTo` can never fire.** `ParseCommand` in
-  `gamecore.pas` splits input into a verb and *one* noun, and there is no
-  `GIVE` verb at all. Both triggers are in the enum and round-trip through
-  every format; they just have nothing to raise them. Needs `G.LastNoun2`,
-  preposition splitting on ` ON ` / ` WITH ` / ` TO `, a `cmdGive` with a
-  handler and a `ShowHelp` line — and `PrevNoun2` saved alongside `PrevNoun`,
-  or `AGAIN` after `USE KEY ON DOOR` silently replays `USE KEY`.
-- **`worldval.pas` does not check events**, so an event naming a room that
-  does not exist, or an `atShowMessage` with no text and no paragraph, fails
-  silently at run time with no symptom — the same class of invisible mistake
-  `CheckPara` exists for. `DescribeTriggers` also has to learn about
-  `atShowParagraph`, or `WriteParaXRef` reports every event-fired paragraph as
-  *"fired by: NOTHING"*.
-- **No editor can author an event.** All three read and write them faithfully,
-  but the only way to write one today is by hand in the text or BPL format.
-  The agreed split when this is picked up: `editor.pas` — the one that ships
-  on the floppy — gets a read-only list with delete and an enable toggle, and
-  full condition/action authoring goes in `editor-tv.pas` and
-  `web/editor.html`, where there is no size budget. `web/editor.html` also
-  still needs its binary v4 layout mirrored (the comment block next to
-  `writeBinary` is the contract with `datafile.pas`) and a `fireEvents` twin
-  for the playtest engine.
+**Cost:** an event can take something away (`atRemoveObject`) or put it on the
+floor of the room the player is standing in, which covers most of a hand-over
+in practice. It cannot put anything directly into the player's hands.
 
-**Cost:** a world can use events, but only an author willing to hand-edit
-world files, and nothing warns them when they get one wrong.
+**Fix:** `Value` is a `SmallInt` and rooms are positive, so the spare space is
+the negative half: `-1` for the player's inventory, `-2` and below for a mob
+(`MobID = -Value - 1`). The inventory case has to respect `MAX_INVENTORY` and
+push onto `PlayerInventory`/`PlayerInvCount`, not just clear `RoomID`. It is an
+encoding change to an action that already ships, so it needs a note in the
+format documentation and a round-trip test, not a quiet patch.
 
 ---
 

@@ -16,7 +16,8 @@ type
   TEditorState = (esMenu, esRoomList, esAddRoom, esEditRoom, esWorldSettings,
                   esObjectList, esAddObject, esEditObject,
                   esMobList, esAddMob, esEditMob,
-                  esParagraphList, esEditParagraph);
+                  esParagraphList, esEditParagraph,
+                  esEventList, esViewEvent);
 
   TParaLines = array[1..MAX_PARA_LINES] of string;
 
@@ -32,6 +33,7 @@ var
   SelectedObject: Integer;
   SelectedMob: Integer;
   SelectedPara: Integer;
+  SelectedEvent: Integer;
 
 procedure DrawHeader;
 begin
@@ -79,6 +81,8 @@ begin
   WriteAt(30, Y, '6. Add Mob');
   Inc(Y, 2);
   WriteAt(30, Y, 'P. Story Paragraphs');
+  Inc(Y, 1);
+  WriteAt(30, Y, 'E. Events');
   Inc(Y, 2);
   WriteAt(30, Y, 'V. Validate World');
   Inc(Y, 2);
@@ -1501,6 +1505,292 @@ begin
   until False;
 end;
 
+{ ---- Events ------------------------------------------------------------
+
+  This editor reads events; it does not write them. Authoring a condition
+  and action list needs more screen and more control than a 25-row CRT form
+  has, and this is the editor that ships on the floppy beside the game -
+  editor-tv and the browser editor have the room for it and no size budget.
+  What is here is what an author needs while playing with a world on a DOS
+  box: see what events exist, turn one off to bisect a misbehaving world, and
+  delete one outright. }
+
+{ The highest slot still in use, which is what EventCount means and what the
+  loader would compute on the next read. Kept in step after a delete so that
+  saving and reloading a world is idempotent. }
+procedure RecomputeEventCount;
+var
+  I: Integer;
+begin
+  World.EventCount := 0;
+  for I := MAX_EVENTS downto 1 do
+    if World.Events[I].Active then
+    begin
+      World.EventCount := I;
+      Break;
+    end;
+end;
+
+{ "room 5", "object 12" - whatever the trigger's IDs mean for this trigger.
+  Reading a raw pair of numbers off the screen and guessing which is which is
+  most of what makes a hand-written event hard to check. }
+function TriggerDetail(const E: TWorldEvent): string;
+
+  function Any(ID: Word; const What: string): string;
+  begin
+    if ID = 0 then Result := 'any ' + What
+    else Result := What + ' ' + IntToStr(ID);
+  end;
+
+begin
+  case E.TriggerType of
+    etEnterRoom, etFirstVisit:
+      Result := Any(E.TriggerID, 'room');
+    etExitRoom:
+      begin
+        Result := Any(E.TriggerID, 'room');
+        if E.TriggerID2 > 0 then
+          Result := Result + ' -> room ' + IntToStr(E.TriggerID2);
+      end;
+    etTakeObject, etDropObject, etUseObject, etExamineObject:
+      Result := Any(E.TriggerID, 'object');
+    etUseObjectOn:
+      Result := Any(E.TriggerID, 'object') + ' on ' +
+                Any(E.TriggerID2, 'object');
+    etTalkToMob:
+      Result := Any(E.TriggerID, 'mob');
+    etGiveTo:
+      Result := Any(E.TriggerID, 'object') + ' to ' + Any(E.TriggerID2, 'mob');
+    etTimer:
+      begin
+        Result := 'turn ' + IntToStr(E.TriggerID);
+        if E.TriggerID2 > 0 then
+          Result := Result + ', then every ' + IntToStr(E.TriggerID2)
+        else
+          Result := Result + ' only';
+      end;
+    etFlagSet, etFlagClear:
+      Result := Any(E.TriggerID, 'flag');
+  else
+    Result := '';
+  end;
+end;
+
+function ConditionLine(const C: TCondition): string;
+begin
+  Result := ConditionName(C.CondType) + ' ' + IntToStr(C.TargetID);
+  if C.Value <> 0 then Result := Result + ', ' + IntToStr(C.Value);
+  if C.Negate then Result := Result + '  (NOT)';
+end;
+
+function ActionLine(const A: TAction): string;
+begin
+  Result := ActionName(A.ActionType) + ' ' + IntToStr(A.TargetID);
+  if A.Value <> 0 then Result := Result + ', ' + IntToStr(A.Value);
+  if A.Text <> '' then Result := Result + '  "' + A.Text + '"';
+end;
+
+procedure ViewEventForm(Slot: Integer);
+var
+  I, Y: Integer;
+begin
+  ClearScreen;
+  DrawHeader;
+
+  SetColor(Yellow, Black);
+  WriteCenter(4, '=== EVENT ' + IntToStr(Slot) + ' ===');
+  ResetColor;
+
+  Y := 6;
+  WriteAt(3, Y, 'Name:    ' + World.Events[Slot].Name);
+  Inc(Y);
+  WriteAt(3, Y, 'Trigger: ' + TriggerName(World.Events[Slot].TriggerType) +
+                '  (' + TriggerDetail(World.Events[Slot]) + ')');
+  Inc(Y);
+  if World.Events[Slot].OneShot then
+    WriteAt(3, Y, 'Fires:   once')
+  else
+    WriteAt(3, Y, 'Fires:   every time');
+  Inc(Y);
+  if World.Events[Slot].Enabled then
+    WriteAt(3, Y, 'Starts:  enabled')
+  else
+    WriteAt(3, Y, 'Starts:  disabled');
+  Inc(Y, 2);
+
+  SetColor(Cyan, Black);
+  WriteAt(3, Y, 'Conditions (all must hold):');
+  ResetColor;
+  Inc(Y);
+  if World.Events[Slot].CondCount = 0 then
+  begin
+    SetColor(DarkGray, Black);
+    WriteAt(5, Y, '(none)');
+    ResetColor;
+    Inc(Y);
+  end
+  else
+    for I := 1 to World.Events[Slot].CondCount do
+    begin
+      WriteAt(5, Y, Copy(IntToStr(I) + '. ' +
+                         ConditionLine(World.Events[Slot].Conditions[I]),
+                         1, 72));
+      Inc(Y);
+    end;
+
+  Inc(Y);
+  SetColor(Cyan, Black);
+  WriteAt(3, Y, 'Actions (in order):');
+  ResetColor;
+  Inc(Y);
+  if World.Events[Slot].ActionCount = 0 then
+  begin
+    SetColor(DarkGray, Black);
+    WriteAt(5, Y, '(none)');
+    ResetColor;
+  end
+  else
+    for I := 1 to World.Events[Slot].ActionCount do
+    begin
+      if Y > 21 then Break;
+      WriteAt(5, Y, Copy(IntToStr(I) + '. ' +
+                         ActionLine(World.Events[Slot].Actions[I]), 1, 72));
+      Inc(Y);
+    end;
+
+  SetColor(Cyan, Black);
+  WriteAt(1, 23, 'Read-only here. Author events in editor-tv or the web ' +
+                 'editor.  Esc');
+  ResetColor;
+  repeat until ReadKey = #27;
+end;
+
+procedure DrawEventList;
+var
+  I, Y, Shown: Integer;
+  Line: string;
+begin
+  ClearScreen;
+  DrawHeader;
+
+  SetColor(Yellow, Black);
+  WriteCenter(4, '=== EVENTS ===');
+  ResetColor;
+
+  Shown := 0;
+  for I := 1 to MAX_EVENTS do
+  begin
+    Y := 6 + Shown;
+    if World.Events[I].Active and (Y < 21) then
+    begin
+      Inc(Shown);
+      if I = SelectedEvent then
+        SetColor(Black, White)
+      else if not World.Events[I].Enabled then
+        SetColor(DarkGray, Black)
+      else
+        SetColor(LightGray, Black);
+      Line := '  ' + Copy(IntToStr(I) + '.   ', 1, 5);
+      if World.Events[I].Enabled then Line := Line + '[on ] '
+                                  else Line := Line + '[off] ';
+      Line := Line + Copy(World.Events[I].Name + StringOfChar(' ', 26), 1, 26) +
+              TriggerName(World.Events[I].TriggerType);
+      WriteAt(3, Y, Copy(Line + StringOfChar(' ', 72), 1, 72));
+      ResetColor;
+    end;
+  end;
+
+  if Shown = 0 then
+  begin
+    SetColor(DarkGray, Black);
+    WriteAt(3, 6, 'No events. Author them in editor-tv or the web editor.');
+    ResetColor;
+  end;
+
+  SetColor(Cyan, Black);
+  WriteAt(1, 22, 'Slot numbers are identity: save games index them, so a ' +
+                 'delete leaves a gap.');
+  WriteAt(1, 23, 'Up/Dn Select  V View  T Toggle on/off  D Del  Esc');
+  ResetColor;
+end;
+
+procedure HandleEventList;
+var
+  Ch: Char;
+  I: Integer;
+begin
+  SelectedEvent := 0;
+  for I := 1 to MAX_EVENTS do
+    if World.Events[I].Active then
+    begin
+      SelectedEvent := I;
+      Break;
+    end;
+
+  repeat
+    DrawEventList;
+    Ch := ReadKey;
+
+    case UpCase(Ch) of
+      #0:
+        case ReadKey of
+          #72: { Up }
+            for I := SelectedEvent - 1 downto 1 do
+              if World.Events[I].Active then
+              begin
+                SelectedEvent := I;
+                Break;
+              end;
+          #80: { Down }
+            for I := SelectedEvent + 1 to MAX_EVENTS do
+              if World.Events[I].Active then
+              begin
+                SelectedEvent := I;
+                Break;
+              end;
+        end;
+      'V':
+        if SelectedEvent > 0 then
+          ViewEventForm(SelectedEvent);
+      'T':
+        if SelectedEvent > 0 then
+        begin
+          { Enabled is the authored starting state. The live EvEnabled bitmap
+            is reseeded from it, because nothing has started playing yet. }
+          World.Events[SelectedEvent].Enabled :=
+            not World.Events[SelectedEvent].Enabled;
+          SeedEventState(World);
+          Modified := True;
+        end;
+      'D':
+        if SelectedEvent > 0 then
+        begin
+          SetColor(LightRed, Black);
+          WriteAt(1, 24, 'Delete event ' + IntToStr(SelectedEvent) +
+                         '? Slot ' + IntToStr(SelectedEvent) +
+                         ' stays empty. (Y/N) ');
+          ResetColor;
+          if UpCase(ReadKey) = 'Y' then
+          begin
+            InitEvent(World.Events[SelectedEvent]);
+            RecomputeEventCount;
+            SeedEventState(World);
+            Modified := True;
+            SelectedEvent := 0;
+            for I := 1 to MAX_EVENTS do
+              if World.Events[I].Active then
+              begin
+                SelectedEvent := I;
+                Break;
+              end;
+          end;
+        end;
+      #27:
+        Exit;
+    end;
+  until False;
+end;
+
 procedure MainLoop;
 var
   Ch: Char;
@@ -1521,6 +1811,7 @@ begin
       '5': HandleMobList;
       '6': EditMobForm(0, True);
       'P': HandleParagraphList;
+      'E': HandleEventList;
       'V': ValidateForm;
       '7': WorldSettings;
       '8': LoadWorldFile;
@@ -1554,6 +1845,7 @@ begin
   SelectedObject := 0;
   SelectedMob := 0;
   SelectedPara := 0;
+  SelectedEvent := 0;
 
   ClrScr;
   CursorOff;

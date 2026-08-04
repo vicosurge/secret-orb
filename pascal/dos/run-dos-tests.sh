@@ -104,6 +104,9 @@ ECHO Running the Secret Orb console tools under FreeDOS
 PAIRTEST.EXE > OUT\PAIRTEST.TXT
 IF ERRORLEVEL 1 ECHO FAIL > OUT\PAIRTEST.RC
 IF NOT ERRORLEVEL 1 ECHO OK > OUT\PAIRTEST.RC
+EVENTTST.EXE > OUT\EVENTTST.TXT
+IF ERRORLEVEL 1 ECHO FAIL > OUT\EVENTTST.RC
+IF NOT ERRORLEVEL 1 ECHO OK > OUT\EVENTTST.RC
 VALIDATE.EXE WORLD.DAT > OUT\VALIDATE.TXT
 IF ERRORLEVEL 1 ECHO FAIL > OUT\VALIDATE.RC
 IF NOT ERRORLEVEL 1 ECHO OK > OUT\VALIDATE.RC
@@ -179,6 +182,16 @@ got() { tr -d '\r' < "$OUT/$1" 2>/dev/null; }
 diff -u "$VM/pairtest-native.txt" <(got PAIRTEST.TXT) \
   || dump_and_die "PairExits output under DOS differs from the native run"
 
+# The event system's own tests. This is the only part of the engine that can
+# be checked under DOS at all: events.pas uses GameData and nothing else, so a
+# plain WriteLn program can drive it, and redirection captures the output. The
+# game and the editor use Crt, which writes to video memory.
+[ "$(got EVENTTST.RC | tr -d '[:space:]')" = "OK" ] \
+  || dump_and_die "event system unit tests failed under DOS"
+"$NATIVE/eventtest" > "$VM/eventtest-native.txt"
+diff -u "$VM/eventtest-native.txt" <(got EVENTTST.TXT) \
+  || dump_and_die "event system output under DOS differs from the native run"
+
 # --- the shipped world must be as clean under DOS as it is natively ---------
 [ "$(got VALIDATE.RC | tr -d '[:space:]')" = "OK" ] \
   || dump_and_die "validate reported errors in the shipped world under DOS"
@@ -198,6 +211,7 @@ cmp "$OUT/ROUND1.DAT" "$VM/native.dat" \
 
 say "PASS"
 echo "  pairtest : matches the native run"
+echo "  eventtest: matches the native run"
 echo "  validate : shipped world is clean under DOS"
 echo "  converter: byte-identical to the native converter"
 if [ "$KEEP" -eq 1 ]; then

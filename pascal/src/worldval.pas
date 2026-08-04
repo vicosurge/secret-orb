@@ -370,6 +370,346 @@ begin
         ' at a time.', 'world');
 end;
 
+{ ---- Events -------------------------------------------------------------
+
+  Everything an event names is a number, and a number that names nothing is
+  invisible at run time: FireEvents skips a trigger that never matches and
+  RunActions skips an action whose target is not there. Neither says a word.
+  That makes events the largest source of the mistake this unit exists for.
+
+  The rules follow the interpreter in events.pas exactly, so they have to be
+  read together. Three of its conventions matter here:
+
+    - a TriggerID of 0 means "any", so an author can write one event for
+      every object. It is not a missing reference;
+    - a TriggerID2 that is set on a trigger whose hook passes 0 can never
+      match, so the event is dead - an error, not a warning;
+    - FireEvents stops at W.EventCount, so an active event above it is dead
+      too. }
+
+function EventLabel(N: Integer): string;
+begin
+  Result := 'event ' + IntToStr(N);
+end;
+
+procedure NeedRoom(var S: TValState; var W: TGameWorld;
+                   ID: Word; const What, Where: string);
+begin
+  if FindRoomByID(W, ID) < 0 then
+    Add(S, ilError, What + ' names room ' + IntToStr(ID) +
+        ', which does not exist.', Where);
+end;
+
+procedure NeedObject(var S: TValState; var W: TGameWorld;
+                     ID: Word; const What, Where: string);
+begin
+  if FindObjectByID(W, ID) < 0 then
+    Add(S, ilError, What + ' names object ' + IntToStr(ID) +
+        ', which does not exist.', Where);
+end;
+
+procedure NeedMob(var S: TValState; var W: TGameWorld;
+                  ID: Word; const What, Where: string);
+begin
+  if FindMobByID(W, ID) < 0 then
+    Add(S, ilError, What + ' names mob ' + IntToStr(ID) +
+        ', which does not exist.', Where);
+end;
+
+procedure NeedFlag(var S: TValState; ID: Word;
+                   const What, Where: string);
+begin
+  if (ID < 1) or (ID > MAX_FLAGS) then
+    Add(S, ilError, What + ' names flag ' + IntToStr(ID) + '; flags run 1 to ' +
+        IntToStr(MAX_FLAGS) + '.', Where);
+end;
+
+procedure NeedCounter(var S: TValState; ID: Word;
+                      const What, Where: string);
+begin
+  if (ID < 1) or (ID > MAX_COUNTERS) then
+    Add(S, ilError, What + ' names counter ' + IntToStr(ID) +
+        '; counters run 1 to ' + IntToStr(MAX_COUNTERS) + '.', Where);
+end;
+
+{ A trigger whose secondary ID the engine always passes as 0. Setting it
+  makes TriggerMatches fail every time, so the event simply never runs. }
+procedure NoSecondID(var S: TValState; const E: TWorldEvent;
+                     const Where: string);
+begin
+  if E.TriggerID2 <> 0 then
+    Add(S, ilError, 'Trigger ' + TriggerName(E.TriggerType) +
+        ' has no second ID, so this event never fires.', Where);
+end;
+
+{ Does any action anywhere write this flag? Used to catch an etFlagSet
+  trigger waiting on a flag nothing ever sets - the event equivalent of an
+  unreachable room. }
+function AnyActionWritesFlag(var W: TGameWorld; N: Word;
+                             Want: Boolean): Boolean;
+var
+  I, J: Integer;
+begin
+  Result := True;
+  for I := 1 to MAX_EVENTS do
+    if W.Events[I].Active then
+      for J := 1 to W.Events[I].ActionCount do
+        with W.Events[I].Actions[J] do
+          if TargetID = N then
+            case ActionType of
+              atToggleFlag: Exit;
+              atSetFlag:    if Want then Exit;
+              atClearFlag:  if not Want then Exit;
+            end;
+  Result := False;
+end;
+
+function AnyActionEnablesEvent(var W: TGameWorld; N: Word): Boolean;
+var
+  I, J: Integer;
+begin
+  Result := True;
+  for I := 1 to MAX_EVENTS do
+    if W.Events[I].Active then
+      for J := 1 to W.Events[I].ActionCount do
+        if (W.Events[I].Actions[J].ActionType = atEnableEvent) and
+           (W.Events[I].Actions[J].TargetID = N) then Exit;
+  Result := False;
+end;
+
+procedure CheckTrigger(var S: TValState; var W: TGameWorld;
+                       const E: TWorldEvent; const Where: string);
+begin
+  case E.TriggerType of
+    etEnterRoom, etFirstVisit:
+      begin
+        if E.TriggerID <> 0 then NeedRoom(S, W, E.TriggerID, 'Trigger', Where);
+        NoSecondID(S, E, Where);
+      end;
+    etExitRoom:
+      begin
+        { The only trigger with two rooms: the one being left and the one
+          being entered }
+        if E.TriggerID <> 0 then NeedRoom(S, W, E.TriggerID, 'Trigger', Where);
+        if E.TriggerID2 <> 0 then
+          NeedRoom(S, W, E.TriggerID2, 'Trigger destination', Where);
+      end;
+    etTakeObject, etDropObject, etUseObject, etExamineObject:
+      begin
+        if E.TriggerID <> 0 then
+          NeedObject(S, W, E.TriggerID, 'Trigger', Where);
+        NoSecondID(S, E, Where);
+      end;
+    etUseObjectOn:
+      begin
+        { Both sides are objects. Handing something to a person is GIVE,
+          which has its own trigger. }
+        if E.TriggerID <> 0 then
+          NeedObject(S, W, E.TriggerID, 'Trigger', Where);
+        if E.TriggerID2 <> 0 then
+          NeedObject(S, W, E.TriggerID2, 'Trigger target', Where);
+      end;
+    etTalkToMob:
+      begin
+        if E.TriggerID <> 0 then NeedMob(S, W, E.TriggerID, 'Trigger', Where);
+        NoSecondID(S, E, Where);
+      end;
+    etGiveTo:
+      begin
+        if E.TriggerID <> 0 then
+          NeedObject(S, W, E.TriggerID, 'Trigger', Where);
+        if E.TriggerID2 <> 0 then
+          NeedMob(S, W, E.TriggerID2, 'Trigger recipient', Where);
+      end;
+    etTimer:
+      { TriggerID is the turn to fire at and TriggerID2 the repeat period.
+        The hook runs after the turn counter is incremented, so turn 0 never
+        arrives: with no period either, the event waits forever. }
+      if (E.TriggerID = 0) and (E.TriggerID2 = 0) then
+        Add(S, ilError, 'Timer fires at turn 0 and never repeats, so it ' +
+            'never fires.', Where);
+    etFlagSet, etFlagClear:
+      begin
+        { 0 means any flag, which is a legitimate catch-all }
+        if E.TriggerID <> 0 then
+        begin
+          NeedFlag(S, E.TriggerID, 'Trigger', Where);
+          if (E.TriggerID <= MAX_FLAGS) and
+             not AnyActionWritesFlag(W, E.TriggerID,
+                                     E.TriggerType = etFlagSet) then
+            Add(S, ilWarn, 'Waits on flag ' + IntToStr(E.TriggerID) +
+                ', which no action ever writes.', Where);
+        end;
+        NoSecondID(S, E, Where);
+      end;
+  end;
+end;
+
+procedure CheckConditions(var S: TValState; var W: TGameWorld;
+                          const E: TWorldEvent; const Where: string);
+var
+  I: Integer;
+  What: string;
+begin
+  for I := 1 to E.CondCount do
+  begin
+    What := 'Condition ' + IntToStr(I);
+    case E.Conditions[I].CondType of
+      ctNone:
+        Add(S, ilWarn, What + ' is empty and always passes.', Where);
+      ctHasObject:
+        NeedObject(S, W, E.Conditions[I].TargetID, What, Where);
+      ctObjectInRoom:
+        begin
+          NeedObject(S, W, E.Conditions[I].TargetID, What, Where);
+          NeedRoom(S, W, Word(E.Conditions[I].Value), What + ' room', Where);
+        end;
+      ctMobInRoom:
+        begin
+          NeedMob(S, W, E.Conditions[I].TargetID, What, Where);
+          NeedRoom(S, W, Word(E.Conditions[I].Value), What + ' room', Where);
+        end;
+      ctFlagIsSet, ctFlagIsClear:
+        NeedFlag(S, E.Conditions[I].TargetID, What, Where);
+      ctCounterEquals, ctCounterGreater, ctCounterLess:
+        NeedCounter(S, E.Conditions[I].TargetID, What, Where);
+      ctVisitedRoom, ctRoomIs:
+        NeedRoom(S, W, E.Conditions[I].TargetID, What, Where);
+    end;
+  end;
+end;
+
+procedure CheckActions(var S: TValState; var W: TGameWorld;
+                       const E: TWorldEvent; const Where: string);
+var
+  I: Integer;
+  What: string;
+  Dir: TDirection;
+  Dest: Word;
+begin
+  if E.ActionCount = 0 then
+    Add(S, ilWarn, 'Event has no actions, so firing it does nothing.', Where);
+
+  for I := 1 to E.ActionCount do
+  begin
+    What := 'Action ' + IntToStr(I);
+    with E.Actions[I] do
+      case ActionType of
+        atNone:
+          Add(S, ilWarn, What + ' is empty and does nothing.', Where);
+        atShowMessage:
+          if Text = '' then
+            Add(S, ilError, What + ' shows an empty message.', Where);
+        atShowParagraph:
+          if TargetID = 0 then
+            Add(S, ilError, What + ' shows paragraph 0, which is no ' +
+                'paragraph at all.', Where)
+          else
+            CheckPara(S, W, TargetID, What, Where);
+
+        atSetFlag, atClearFlag, atToggleFlag:
+          NeedFlag(S, TargetID, What, Where);
+        atSetCounter, atAddCounter, atSubCounter:
+          NeedCounter(S, TargetID, What, Where);
+
+        atMoveObject, atSpawnObject:
+          begin
+            NeedObject(S, W, TargetID, What, Where);
+            { Value is the destination room. Zero puts the object nowhere,
+              which is what atRemoveObject is for and is more likely a
+              forgotten field than a deliberate disappearance. }
+            if Value = 0 then
+              Add(S, ilWarn, What + ' moves the object to room 0, taking it ' +
+                  'out of play.', Where)
+            else
+              NeedRoom(S, W, Word(Value), What + ' destination', Where);
+          end;
+        atRemoveObject:
+          NeedObject(S, W, TargetID, What, Where);
+        atMoveMob:
+          begin
+            NeedMob(S, W, TargetID, What, Where);
+            if Value = 0 then
+              Add(S, ilWarn, What + ' moves the mob to room 0, taking it ' +
+                  'out of play.', Where)
+            else
+              NeedRoom(S, W, Word(Value), What + ' destination', Where);
+          end;
+        atRemoveMob:
+          NeedMob(S, W, TargetID, What, Where);
+
+        atLockExit, atUnlockExit:
+          begin
+            NeedRoom(S, W, TargetID, What, Where);
+            { The direction is the low three bits of Value, so it can hold a
+              number no direction answers to. DecodeExitValue clamps that to
+              north rather than crashing - silently locking the wrong door. }
+            if (Value and $07) > Ord(High(TDirection)) then
+              Add(S, ilError, What + ' has direction ' +
+                  IntToStr(Value and $07) + ', which is not a direction.',
+                  Where)
+            else
+            begin
+              DecodeExitValue(Value, Dir, Dest);
+              if ActionType = atUnlockExit then
+                if Dest = 0 then
+                  Add(S, ilError, What + ' opens the ' + GetExitName(Dir) +
+                      ' exit onto nothing.', Where)
+                else
+                  NeedRoom(S, W, Dest, What + ' destination', Where);
+            end;
+          end;
+
+        atTeleportPlayer:
+          NeedRoom(S, W, TargetID, What, Where);
+        atAddScore:
+          if TargetID = 0 then
+            Add(S, ilWarn, What + ' awards 0 points.', Where);
+        atEndGame: ;
+
+        atEnableEvent, atDisableEvent:
+          if (TargetID < 1) or (TargetID > MAX_EVENTS) then
+            Add(S, ilError, What + ' names event ' + IntToStr(TargetID) +
+                '; events run 1 to ' + IntToStr(MAX_EVENTS) + '.', Where)
+          else if not W.Events[TargetID].Active then
+            Add(S, ilError, What + ' names event ' + IntToStr(TargetID) +
+                ', which is an empty slot.', Where);
+      end;
+  end;
+end;
+
+procedure CheckEvents(var S: TValState; var W: TGameWorld);
+var
+  I: Integer;
+  Where: string;
+begin
+  for I := 1 to MAX_EVENTS do
+  begin
+    if not W.Events[I].Active then Continue;
+    Where := EventLabel(I);
+
+    { FireEvents walks slots 1..EventCount, so anything past it is dead
+      whatever it says. The loader keeps EventCount at the highest used slot,
+      so this catches an editor that forgot to raise it. }
+    if I > W.EventCount then
+      Add(S, ilError, 'Event is above the event count of ' +
+          IntToStr(W.EventCount) + ', so it never fires.', Where);
+
+    if W.Events[I].Name = '' then
+      Add(S, ilWarn, 'Event has no name, which makes it hard to find.',
+          Where);
+
+    if not W.Events[I].Enabled then
+      if not AnyActionEnablesEvent(W, I) then
+        Add(S, ilWarn, 'Event starts disabled and nothing enables it.',
+            Where);
+
+    CheckTrigger(S, W, W.Events[I], Where);
+    CheckConditions(S, W, W.Events[I], Where);
+    CheckActions(S, W, W.Events[I], Where);
+  end;
+end;
+
 function ValidateWorld(var W: TGameWorld; var List: TIssueList): Integer;
 var
   S: TValState;
@@ -384,6 +724,7 @@ begin
   CheckReachability(S, W);
   CheckOneWayExits(S, W);
   CheckCapacity(S, W);
+  CheckEvents(S, W);
 
   Result := S.Count;
 end;
@@ -427,7 +768,7 @@ end;
   many were found, so the caller can flag a paragraph nothing reaches. }
 function DescribeTriggers(var F: Text; var W: TGameWorld; Num: Word): Integer;
 var
-  I: Integer;
+  I, J: Integer;
 begin
   Result := 0;
 
@@ -470,6 +811,22 @@ begin
               W.Mobs[I].ID, ' "', W.Mobs[I].Name, '"');
       Inc(Result);
     end;
+
+  { The seventh route to a paragraph, and the only one that is not a field on
+    an entity: an event's atShowParagraph action. Without this an
+    event-fired paragraph is reported as "fired by: NOTHING", which is the
+    one line in this file an author is meant to act on. }
+  for I := 1 to MAX_EVENTS do
+    if W.Events[I].Active then
+      for J := 1 to W.Events[I].ActionCount do
+        if (W.Events[I].Actions[J].ActionType = atShowParagraph) and
+           (W.Events[I].Actions[J].TargetID = Num) then
+        begin
+          WriteLn(F, '      fired by: event ', I, ' "', W.Events[I].Name,
+                  '", action ', J, ' (', TriggerName(W.Events[I].TriggerType),
+                  ')');
+          Inc(Result);
+        end;
 end;
 
 { Reports a trigger pointing at a slot with no text. At run time this fires
@@ -486,7 +843,7 @@ end;
 function WriteParaXRef(const FileName: string; var W: TGameWorld): Boolean;
 var
   F: Text;
-  I, Used, Orphans, Dangling: Integer;
+  I, J, Used, Orphans, Dangling: Integer;
   Preview: TParaText;
 begin
   Result := False;
@@ -546,6 +903,12 @@ begin
     if W.Mobs[I].Active then
       ReportDangling(F, W, Dangling, W.Mobs[I].FirstTalkPara,
                      'Mob ' + IntToStr(W.Mobs[I].ID) + ' first talk');
+  for I := 1 to MAX_EVENTS do
+    if W.Events[I].Active then
+      for J := 1 to W.Events[I].ActionCount do
+        if W.Events[I].Actions[J].ActionType = atShowParagraph then
+          ReportDangling(F, W, Dangling, W.Events[I].Actions[J].TargetID,
+                         'Event ' + IntToStr(I) + ' action ' + IntToStr(J));
   if Dangling = 0 then
     WriteLn(F, '  (none)');
 

@@ -281,6 +281,7 @@
   <button data-tab="objects" aria-selected="false">Objects <span class="badge" id="bObjects">0</span></button>
   <button data-tab="mobs" aria-selected="false">Mobs <span class="badge" id="bMobs">0</span></button>
   <button data-tab="story" aria-selected="false">Story <span class="badge" id="bParas">0</span></button>
+  <button data-tab="events" aria-selected="false">Events <span class="badge" id="bEvents">0</span></button>
   <button data-tab="map" aria-selected="false">Map</button>
   <button data-tab="check" aria-selected="false">Check <span class="badge" id="bIssues">0</span></button>
   <button data-tab="play" aria-selected="false">Playtest</button>
@@ -335,6 +336,17 @@
         <ul id="listParas"></ul>
       </div>
       <div class="form" id="formPara"></div>
+    </div>
+  </section>
+
+  <!-- EVENTS -->
+  <section class="panel" id="panel-events">
+    <div class="split">
+      <div class="listbox">
+        <header><span>Events</span><button id="addEvent">+ Add</button></header>
+        <ul id="listEvents"></ul>
+      </div>
+      <div class="form" id="formEvent"></div>
     </div>
   </section>
 
@@ -405,9 +417,35 @@ const LIM = {
   TITLE: 40, ROOM_NAME: 40, ROOM_DESC: 255,
   OBJ_NAME: 30, OBJ_DESC: 100, USE_TEXT: 100,
   MOB_NAME: 30, MOB_DESC: 100, DIALOGUE: 200,
-  PARAGRAPHS: 128, PARA_LEN: 1600
+  PARAGRAPHS: 128, PARA_LEN: 1600,
+  EVENTS: 128, FLAGS: 64, COUNTERS: 32,
+  CONDITIONS: 4, ACTIONS: 8, EVENT_NAME: 40, EVENT_TEXT: 80, VAR_NAME: 30
 };
 const WF_BOOKLET = 0x01;
+
+/* Event enum spellings, in the order gamedata.pas declares them. The ordinal
+   is the array index and goes on disk as a byte, so these lists are
+   append-only: inserting a member reinterprets every world file ever
+   written. The names are what the text and BPL formats carry. */
+const TRIGGERS = ["ENTERROOM", "EXITROOM", "FIRSTVISIT", "TAKEOBJECT", "DROPOBJECT",
+                  "USEOBJECT", "USEOBJECTON", "EXAMINEOBJECT", "TALKTOMOB", "GIVETO",
+                  "TIMER", "FLAGSET", "FLAGCLEAR"];
+const CONDS = ["NONE", "HASOBJECT", "OBJECTINROOM", "MOBINROOM", "FLAGISSET",
+               "FLAGISCLEAR", "COUNTEREQUALS", "COUNTERGREATER", "COUNTERLESS",
+               "VISITEDROOM", "ROOMIS"];
+const ACTS = ["NONE", "SHOWMESSAGE", "SHOWPARAGRAPH", "SETFLAG", "CLEARFLAG",
+              "TOGGLEFLAG", "SETCOUNTER", "ADDCOUNTER", "SUBCOUNTER", "MOVEOBJECT",
+              "REMOVEOBJECT", "SPAWNOBJECT", "MOVEMOB", "REMOVEMOB", "UNLOCKEXIT",
+              "LOCKEXIT", "TELEPORTPLAYER", "ADDSCORE", "ENDGAME", "ENABLEEVENT",
+              "DISABLEEVENT"];
+// An unknown ordinal degrades to the inert member rather than being trusted,
+// which is how a file written by a newer build stays readable.
+const trigName = i => TRIGGERS[i] || TRIGGERS[0];
+const condName = i => CONDS[i] || CONDS[0];
+const actName = i => ACTS[i] || ACTS[0];
+const trigOrd = s => Math.max(0, TRIGGERS.indexOf(String(s).toUpperCase()));
+const condOrd = s => Math.max(0, CONDS.indexOf(String(s).toUpperCase()));
+const actOrd = s => Math.max(0, ACTS.indexOf(String(s).toUpperCase()));
 const DIRS = ["north", "south", "east", "west", "up", "down"];
 const DIR_LABEL = { north: "North", south: "South", east: "East", west: "West", up: "Up", down: "Down" };
 const OPPOSITE = { north: "south", south: "north", east: "west", west: "east", up: "down", down: "up" };
@@ -423,10 +461,21 @@ function blankWorld() {
   // paragraphs is a sparse map of number -> text. Numbers are printed in the
   // booklet, so deleting one must leave its number unused rather than shift
   // every later paragraph.
+  // events follows the same rule for a stronger reason: a save game's Fired
+  // and EvEnabled bitmaps are indexed by slot, and enable/disable actions
+  // name a slot, so compacting on save would repoint every existing save at
+  // the wrong events.
   return { title: "Untitled", startRoom: 1, winRoomID: 0, winObjectID: 0,
            introPara: 0, winPara: 0, losePara: 0, worldFlags: 0,
-           paragraphs: {}, rooms: [], objects: [], mobs: [] };
+           paragraphs: {}, rooms: [], objects: [], mobs: [],
+           events: {}, flagNames: {}, counterNames: {} };
 }
+function newEvent(name) {
+  return { name: name || "", trigger: "ENTERROOM", triggerID: 0, triggerID2: 0,
+           oneShot: true, enabled: true, conds: [], actions: [] };
+}
+function newCond() { return { type: "NONE", targetID: 0, value: 0, negate: false }; }
+function newAction() { return { type: "NONE", targetID: 0, value: 0, text: "" }; }
 function newRoom(id) {
   return { id, name: "", desc: "", exits: { north: 0, south: 0, east: 0, west: 0, up: 0, down: 0 },
            points: 0, firstVisitPara: 0 };
@@ -446,6 +495,25 @@ function paraCount() {
     if (world.paragraphs[k] && i > n) n = i;
   }
   return n;
+}
+
+// Slots in use, ascending. The engine walks events in slot order, so this is
+// also the order they fire in.
+function eventSlots(w) {
+  return Object.keys((w || world).events).map(k => k | 0)
+    .filter(i => i >= 1 && i <= LIM.EVENTS && (w || world).events[i])
+    .sort((a, b) => a - b);
+}
+// Highest used slot, which is what EventCount means on disk - not a count of
+// active ones. A gap costs nothing: each record carries its own number.
+function eventCount(w) {
+  const s = eventSlots(w);
+  return s.length ? s[s.length - 1] : 0;
+}
+// First free slot, for "add event".
+function nextEventSlot() {
+  for (let i = 1; i <= LIM.EVENTS; i++) if (!world.events[i]) return i;
+  return 0;
 }
 function paraNumbers() {
   return Object.keys(world.paragraphs)
@@ -501,7 +569,7 @@ function readShortString(view, off, maxLen) {
 const flagsToByte = f => (f.pickup ? 1 : 0) | (f.use ? 2 : 0) | (f.open ? 4 : 0) | (f.read ? 8 : 0);
 const byteToFlags = b => ({ pickup: !!(b & 1), use: !!(b & 2), open: !!(b & 4), read: !!(b & 8) });
 
-/* ---- Binary SORB version 3 --------------------------------------------
+/* ---- Binary SORB version 4 --------------------------------------------
    Record sizes and field offsets are taken from the packed records in
    pascal/src/datafile.pas: header 69, room 317, object 246, mob 343 bytes.
    Each version 3 record is its version 2 record with one Word appended, and
@@ -510,9 +578,112 @@ const byteToFlags = b => ({ pickup: !!(b & 1), use: !!(b & 2), open: !!(b & 4), 
    After the mob records comes the paragraph section:
      Uint16 count, then count times (Uint16 length, length bytes of text).
    A zero length is an unused slot, which is how numbering survives a
-   deletion. Any drift from datafile.pas garbles every record. */
+   deletion. Any drift from datafile.pas garbles every record.
+
+   Version 4 changes no record. It appends three self-describing sections
+   after the paragraph blob:
+
+     Uint16 nEvents                 // records that follow, NOT the highest
+                                    // slot: gaps are skipped, and each
+                                    // record carries its own slot number
+     repeat nEvents times:
+       Uint16 Size                  // bytes after this field
+       Uint16 Number                // the slot, 1..MAX_EVENTS
+       Uint8  NameLen + name
+       Uint8  TriggerType           // ordinal, never the enum itself
+       Uint16 TriggerID ; Uint16 TriggerID2
+       Uint8  Flags                 // bit 0 OneShot, bit 1 Enabled
+       Uint8  CondCount   ; repeat 6 bytes: type, Uint16 target,
+                                            Int16 value, negate
+       Uint8  ActionCount ; repeat: type, Uint16 target, Int16 value,
+                                    Uint8 textLen + text
+     Uint16 FlagNameCount    ; repeat Uint8 len + bytes
+     Uint16 CounterNameCount ; repeat Uint8 len + bytes
+
+   The event record is the one variable-length record in the format: a fixed
+   one would reserve MAX_ACTIONS x MAX_EVENT_TEXT per event, 764 bytes where
+   a realistic event uses under a hundred. The leading Size lets a reader
+   skip a record whose tail it does not understand, which is what makes this
+   file forward-compatible rather than merely versioned. */
 const BIN = { HEADER: 69, ROOM: 317, OBJECT: 246, MOB: 343 };
 const BIN_V2 = { ROOM: 315, OBJECT: 244, MOB: 341 };
+const EV_ONESHOT = 0x01, EV_ENABLED = 0x02;
+
+// Events are encoded to byte arrays first so the buffer can be sized exactly,
+// the same way the paragraph section already is.
+function encodeEvent(slot, e) {
+  const b = [];
+  const put16 = n => { b.push(n & 0xff, (n >> 8) & 0xff); };
+  const putStr = (s, max) => {
+    const bytes = latin1(s || "").slice(0, max);
+    b.push(bytes.length);
+    for (const c of bytes) b.push(c);
+  };
+  put16(slot);
+  putStr(e.name, LIM.EVENT_NAME);
+  b.push(trigOrd(e.trigger));
+  put16(e.triggerID | 0);
+  put16(e.triggerID2 | 0);
+  b.push((e.oneShot ? EV_ONESHOT : 0) | (e.enabled ? EV_ENABLED : 0));
+  const conds = (e.conds || []).slice(0, LIM.CONDITIONS);
+  b.push(conds.length);
+  for (const c of conds) {
+    b.push(condOrd(c.type));
+    put16(c.targetID | 0);
+    put16(c.value | 0);          // SmallInt: two's complement, same bytes
+    b.push(c.negate ? 1 : 0);
+  }
+  const acts = (e.actions || []).slice(0, LIM.ACTIONS);
+  b.push(acts.length);
+  for (const a of acts) {
+    b.push(actOrd(a.type));
+    put16(a.targetID | 0);
+    put16(a.value | 0);
+    putStr(a.text, LIM.EVENT_TEXT);
+  }
+  return b;
+}
+
+function decodeEvent(v, off, end) {
+  let p = off;
+  const u8 = () => v.getUint8(p++);
+  const u16 = () => { const n = v.getUint16(p, true); p += 2; return n; };
+  const i16 = () => { const n = v.getInt16(p, true); p += 2; return n; };
+  const str = () => {
+    const n = u8();
+    let s = "";
+    for (let i = 0; i < n; i++) s += String.fromCharCode(v.getUint8(p + i));
+    p += n;
+    return s;
+  };
+  const slot = u16();
+  const e = newEvent(str());
+  e.trigger = trigName(u8());
+  e.triggerID = u16();
+  e.triggerID2 = u16();
+  const fl = u8();
+  e.oneShot = !!(fl & EV_ONESHOT);
+  e.enabled = !!(fl & EV_ENABLED);
+  let n = u8();
+  for (let i = 0; i < n && p < end; i++) {
+    const c = newCond();
+    c.type = condName(u8());
+    c.targetID = u16();
+    c.value = i16();
+    c.negate = !!u8();
+    e.conds.push(c);
+  }
+  n = u8();
+  for (let i = 0; i < n && p < end; i++) {
+    const a = newAction();
+    a.type = actName(u8());
+    a.targetID = u16();
+    a.value = i16();
+    a.text = str();
+    e.actions.push(a);
+  }
+  return { slot, event: e };
+}
 
 function writeBinary() {
   const rooms = world.rooms, objects = world.objects, mobs = world.mobs;
@@ -523,15 +694,38 @@ function writeBinary() {
   for (let i = 1; i <= nPara; i++) paraBytes.push(latin1(world.paragraphs[i] || "").slice(0, LIM.PARA_LEN));
   const paraSize = 2 + paraBytes.reduce((s, b) => s + 2 + b.length, 0);
 
+  // Events, then the two name tables, on the same principle. Empty slots are
+  // skipped rather than written as a hole: each record carries its own slot
+  // number, so a gap costs nothing at all.
+  const evBytes = eventSlots().map(i => encodeEvent(i, world.events[i]));
+  // Uint16 count, then each record behind its own Uint16 size.
+  const evSize = 2 + evBytes.reduce((s, b) => s + 2 + b.length, 0);
+
+  const nameTable = (map, limit) => {
+    let hi = 0;
+    for (const k of Object.keys(map)) {
+      const i = k | 0;
+      if (map[k] && i >= 1 && i <= limit && i > hi) hi = i;
+    }
+    const rows = [];
+    for (let i = 1; i <= hi; i++)
+      rows.push(latin1(map[i] || "").slice(0, LIM.VAR_NAME));
+    return rows;
+  };
+  const flagRows = nameTable(world.flagNames, LIM.FLAGS);
+  const counterRows = nameTable(world.counterNames, LIM.COUNTERS);
+  const namesSize = 2 + flagRows.reduce((s, b) => s + 1 + b.length, 0) +
+                    2 + counterRows.reduce((s, b) => s + 1 + b.length, 0);
+
   const total = BIN.HEADER + rooms.length * BIN.ROOM + objects.length * BIN.OBJECT +
-                mobs.length * BIN.MOB + paraSize;
+                mobs.length * BIN.MOB + paraSize + evSize + namesSize;
   const buf = new ArrayBuffer(total);
   const v = new DataView(buf);
   let p = 0;
 
   // Header
   "SORB".split("").forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
-  v.setUint16(4, 3, true);                       // version
+  v.setUint16(4, 4, true);                       // version
   v.setUint16(6, rooms.length, true);
   v.setUint16(8, objects.length, true);
   v.setUint16(10, mobs.length, true);
@@ -592,6 +786,25 @@ function writeBinary() {
     for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
     p += bytes.length;
   }
+
+  // Version 4 sections. A world with no events costs 6 bytes.
+  v.setUint16(p, evBytes.length, true);
+  p += 2;
+  for (const bytes of evBytes) {
+    v.setUint16(p, bytes.length, true);
+    p += 2;
+    for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
+    p += bytes.length;
+  }
+  for (const rows of [flagRows, counterRows]) {
+    v.setUint16(p, rows.length, true);
+    p += 2;
+    for (const bytes of rows) {
+      v.setUint8(p++, bytes.length);
+      for (let i = 0; i < bytes.length; i++) v.setUint8(p + i, bytes[i]);
+      p += bytes.length;
+    }
+  }
   return buf;
 }
 
@@ -600,7 +813,7 @@ function readBinary(buf, fileName) {
   const magic = String.fromCharCode(v.getUint8(0), v.getUint8(1), v.getUint8(2), v.getUint8(3));
   if (magic !== "SORB") throw new Error("Not a Secret Orb binary world (missing SORB signature).");
   const version = v.getUint16(4, true);
-  if (version < 1 || version > 3) throw new Error("Unsupported binary version " + version + ".");
+  if (version < 1 || version > 4) throw new Error("Unsupported binary version " + version + ".");
 
   const w = blankWorld();
   const nRooms = v.getUint16(6, true), nObjects = v.getUint16(8, true), nMobs = v.getUint16(10, true);
@@ -675,6 +888,35 @@ function readBinary(buf, fileName) {
       p += len;
     }
   }
+
+  if (version >= 4 && p + 2 <= buf.byteLength) {
+    const n = Math.min(v.getUint16(p, true), LIM.EVENTS);
+    p += 2;
+    for (let i = 0; i < n && p + 2 <= buf.byteLength; i++) {
+      const size = v.getUint16(p, true);
+      p += 2;
+      if (p + size > buf.byteLength) break;     // truncated, keep what we have
+      // Read within this record's own bounds and then step by size, so a
+      // record with a tail we do not understand is skipped rather than
+      // desynchronising everything after it.
+      const { slot, event } = decodeEvent(v, p, p + size);
+      if (slot >= 1 && slot <= LIM.EVENTS) w.events[slot] = event;
+      p += size;
+    }
+    for (const [map, limit] of [[w.flagNames, LIM.FLAGS], [w.counterNames, LIM.COUNTERS]]) {
+      if (p + 2 > buf.byteLength) break;
+      const rows = Math.min(v.getUint16(p, true), limit);
+      p += 2;
+      for (let i = 1; i <= rows && p < buf.byteLength; i++) {
+        const len = v.getUint8(p++);
+        if (p + len > buf.byteLength) break;
+        let s = "";
+        for (let k = 0; k < len; k++) s += String.fromCharCode(v.getUint8(p + k));
+        p += len;
+        if (s) map[i] = s;
+      }
+    }
+  }
   return w;
 }
 
@@ -696,6 +938,10 @@ function writeText() {
   L.push("WINPARA=" + (world.winPara | 0));
   L.push("LOSEPARA=" + (world.losePara | 0));
   L.push("BOOKLET=" + (bookletMode() ? 1 : 0));
+  for (const [map, limit, key] of [[world.flagNames, LIM.FLAGS, "FLAG"],
+                                   [world.counterNames, LIM.COUNTERS, "COUNTER"]])
+    for (let i = 1; i <= limit; i++)
+      if (map[i]) L.push(key + "=" + i + "," + oneLine(map[i]));
   L.push("");
   for (const r of world.rooms) {
     L.push("[ROOM:" + r.id + "]");
@@ -727,6 +973,28 @@ function writeText() {
     L.push("FIRSTTALK=" + (m.firstTalkPara | 0));
     L.push("");
   }
+  // COND and ACTION repeat and accumulate where every other key assigns, so
+  // the order here is the order they run in. The number in the header is the
+  // slot, not a running index.
+  for (const n of eventSlots()) {
+    const e = world.events[n];
+    L.push("[EVENT:" + n + "]");
+    L.push("NAME=" + oneLine(e.name));
+    L.push("TRIGGER=" + e.trigger);
+    L.push("TRIGGERID=" + (e.triggerID | 0));
+    L.push("TRIGGERID2=" + (e.triggerID2 | 0));
+    L.push("ONESHOT=" + (e.oneShot ? 1 : 0));
+    L.push("ENABLED=" + (e.enabled ? 1 : 0));
+    for (const c of e.conds)
+      L.push("COND=" + c.type + "," + (c.targetID | 0) + "," + (c.value | 0) +
+             "," + (c.negate ? 1 : 0));
+    // The message takes everything after the third comma verbatim, so it may
+    // contain commas.
+    for (const a of e.actions)
+      L.push("ACTION=" + a.type + "," + (a.targetID | 0) + "," + (a.value | 0) +
+             "," + oneLine(a.text));
+    L.push("");
+  }
   // Paragraph bodies are literal text rather than key=value, so they keep
   // their line breaks. Only a real section header ends one.
   for (const n of paraNumbers()) {
@@ -739,7 +1007,21 @@ function writeText() {
 
 // Only real section headers end a paragraph body; a body line may itself
 // start with a bracket. Mirrors IsSectionHeader in datafile.pas.
-const SECTION_RE = /^\[(WORLD\]|ROOM:|OBJECT:|MOB:|PARAGRAPH:)/i;
+const SECTION_RE = /^\[(WORLD\]|ROOM:|OBJECT:|MOB:|PARAGRAPH:|EVENT:)/i;
+
+// "SHOWMESSAGE,0,0,It is, in fact, a trap." - the last field takes everything
+// after the third comma, so a message may contain commas.
+function splitFields(val, n) {
+  const out = [];
+  let rest = val;
+  for (let i = 0; i < n - 1; i++) {
+    const c = rest.indexOf(",");
+    if (c < 0) { out.push(rest); rest = ""; }
+    else { out.push(rest.slice(0, c)); rest = rest.slice(c + 1); }
+  }
+  out.push(rest);
+  return out;
+}
 
 function readText(src) {
   const w = blankWorld();
@@ -774,6 +1056,13 @@ function readText(src) {
       else if (kind === "ROOM") { section = "room"; cur = newRoom(id || w.rooms.length + 1); w.rooms.push(cur); }
       else if (kind === "OBJECT") { section = "object"; cur = newObject(id || w.objects.length + 1); w.objects.push(cur); }
       else if (kind === "MOB") { section = "mob"; cur = newMob(id || w.mobs.length + 1); w.mobs.push(cur); }
+      else if (kind === "EVENT") {
+        // The header carries the slot, which is identity: a save game's
+        // bitmaps are indexed by it, so it must not shift.
+        section = "event";
+        cur = newEvent();
+        if (id >= 1 && id <= LIM.EVENTS) w.events[id] = cur; else cur = null;
+      }
       else if (kind === "PARAGRAPH") {
         section = "paragraph"; cur = null;
         paraNum = (id >= 1 && id <= LIM.PARAGRAPHS) ? id : 0;
@@ -796,6 +1085,36 @@ function readText(src) {
       else if (key === "WINPARA") w.winPara = num;
       else if (key === "LOSEPARA") w.losePara = num;
       else if (key === "BOOKLET") w.worldFlags = num ? (w.worldFlags | WF_BOOKLET) : (w.worldFlags & ~WF_BOOKLET);
+      else if (key === "FLAG" || key === "COUNTER") {
+        const [n, nm] = splitFields(val, 2);
+        const i = parseInt(n, 10) || 0;
+        const map = key === "FLAG" ? w.flagNames : w.counterNames;
+        const limit = key === "FLAG" ? LIM.FLAGS : LIM.COUNTERS;
+        if (i >= 1 && i <= limit) map[i] = nm.trim().slice(0, LIM.VAR_NAME);
+      }
+    } else if (section === "event" && cur) {
+      if (key === "NAME") cur.name = val.slice(0, LIM.EVENT_NAME);
+      else if (key === "TRIGGER") cur.trigger = trigName(trigOrd(val));
+      else if (key === "TRIGGERID") cur.triggerID = num;
+      else if (key === "TRIGGERID2") cur.triggerID2 = num;
+      else if (key === "ONESHOT") cur.oneShot = !!num;
+      else if (key === "ENABLED") cur.enabled = !!num;
+      else if (key === "COND") {
+        const [t, tgt, va, neg] = splitFields(val, 4);
+        if (cur.conds.length < LIM.CONDITIONS)
+          cur.conds.push({ type: condName(condOrd(t.trim())),
+                           targetID: parseInt(tgt, 10) || 0,
+                           value: parseInt(va, 10) || 0,
+                           negate: !!(parseInt(neg, 10) || 0) });
+      }
+      else if (key === "ACTION") {
+        const [t, tgt, va, txt] = splitFields(val, 4);
+        if (cur.actions.length < LIM.ACTIONS)
+          cur.actions.push({ type: actName(actOrd(t.trim())),
+                             targetID: parseInt(tgt, 10) || 0,
+                             value: parseInt(va, 10) || 0,
+                             text: txt.slice(0, LIM.EVENT_TEXT) });
+      }
     } else if (section === "room" && cur) {
       if (key === "NAME") cur.name = val;
       else if (key === "DESC") cur.desc = val;
@@ -851,18 +1170,22 @@ function writeBPL() {
   L.push("# Generated by the Secret Orb web editor");
   L.push("");
   L.push("{START:WORLD}");
-  L.push("{REVISION:3}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
+  L.push("{REVISION:4}{TITLE:" + bplSafe(world.title) + "}{START:R" + (world.startRoom | 0) + "}");
   if (world.winRoomID > 0 || world.winObjectID > 0)
     L.push("{WINROOM:" + (world.winRoomID | 0) + "}{WINOBJ:" + (world.winObjectID | 0) + "}");
   if (world.introPara > 0 || world.winPara > 0 || world.losePara > 0)
     L.push("{INTRO:" + (world.introPara | 0) + "}{WINPARA:" + (world.winPara | 0) +
            "}{LOSEPARA:" + (world.losePara | 0) + "}");
   if (bookletMode()) L.push("{BOOKLET:1}");
+  for (const [map, limit, key] of [[world.flagNames, LIM.FLAGS, "FLAGNAME"],
+                                   [world.counterNames, LIM.COUNTERS, "COUNTERNAME"]])
+    for (let i = 1; i <= limit; i++)
+      if (map[i]) L.push("{" + key + ":" + i + "," + bplSafe(map[i]) + "}");
   L.push("{END}");
   L.push("");
   for (const r of world.rooms) {
     L.push("{START:ROOM}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + r.id + "}{VAR:R" + r.id + "}{NAME:" + bplSafe(r.name) + "}+++");
     L.push("{DESC:" + bplSafe(r.desc) + "}+++");
     L.push(DIRS.map(d => "{" + d.toUpperCase() + ":" + (r.exits[d] | 0) + "}").join(""));
@@ -873,7 +1196,7 @@ function writeBPL() {
   }
   for (const o of world.objects) {
     L.push("{START:OBJECT}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + o.id + "}{VAR:O" + o.id + "}{NAME:" + bplSafe(o.name) + "}+++");
     L.push("{DESC:" + bplSafe(o.desc) + "}+++");
     let line = "{ROOM:" + (o.roomID | 0) + "}";
@@ -889,7 +1212,7 @@ function writeBPL() {
   }
   for (const m of world.mobs) {
     L.push("{START:MOB}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + m.id + "}{VAR:M" + m.id + "}{NAME:" + bplSafe(m.name) + "}+++");
     L.push("{DESC:" + bplSafe(m.desc) + "}+++");
     L.push("{ROOM:" + (m.roomID | 0) + "}");
@@ -901,9 +1224,29 @@ function writeBPL() {
   // OC is the booklet number, so gaps are preserved.
   for (const n of paraNumbers()) {
     L.push("{START:PARAGRAPH}");
-    L.push("{REVISION:3}");
+    L.push("{REVISION:4}");
     L.push("{OC:" + n + "}");
     L.push("{TEXT:" + bplEncodePara(world.paragraphs[n]) + "}");
+    L.push("{END}");
+    L.push("");
+  }
+  // Here OC is the event slot rather than a running index, for a stronger
+  // reason than booklet numbering: save games index their Fired bitmap by it.
+  // COND and ACTION accumulate where every other BPL tag assigns.
+  for (const n of eventSlots()) {
+    const e = world.events[n];
+    L.push("{START:EVENT}");
+    L.push("{REVISION:4}");
+    L.push("{OC:" + n + "}{NAME:" + bplSafe(e.name) + "}+++");
+    let line = "{TRIGGER:" + e.trigger + "}{TRIGGERID:" + (e.triggerID | 0) + "}";
+    if (e.triggerID2 > 0) line += "{TRIGGERID2:" + e.triggerID2 + "}";
+    L.push(line + "{ONESHOT:" + (e.oneShot ? 1 : 0) + "}{ENABLED:" + (e.enabled ? 1 : 0) + "}");
+    for (const c of e.conds)
+      L.push("{COND:" + c.type + "," + (c.targetID | 0) + "," + (c.value | 0) +
+             "," + (c.negate ? 1 : 0) + "}");
+    for (const a of e.actions)
+      L.push("{ACTION:" + a.type + "," + (a.targetID | 0) + "," + (a.value | 0) +
+             "," + bplSafe(a.text) + "}");
     L.push("{END}");
     L.push("");
   }
@@ -912,7 +1255,7 @@ function writeBPL() {
 
 function readBPL(src) {
   const w = blankWorld();
-  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB", "PARAGRAPH"];
+  const BLOCK_TYPES = ["WORLD", "ROOM", "OBJECT", "MOB", "PARAGRAPH", "EVENT"];
   let full = "", inBlock = false, type = "", t = null;
 
   const flush = () => {
@@ -947,6 +1290,31 @@ function readBPL(src) {
       const n = t.oc | 0;
       if (n >= 1 && n <= LIM.PARAGRAPHS && t.TEXT)
         w.paragraphs[n] = bplDecodePara(t.TEXT).slice(0, LIM.PARA_LEN);
+    } else if (type === "EVENT") {
+      const n = t.oc | 0;
+      if (n >= 1 && n <= LIM.EVENTS) {
+        const e = newEvent((t.NAME || "").slice(0, LIM.EVENT_NAME));
+        e.trigger = trigName(trigOrd(t.TRIGGER || "ENTERROOM"));
+        e.triggerID = parseInt(t.TRIGGERID || "0", 10) || 0;
+        e.triggerID2 = parseInt(t.TRIGGERID2 || "0", 10) || 0;
+        e.oneShot = (parseInt(t.ONESHOT === undefined ? "1" : t.ONESHOT, 10) || 0) !== 0;
+        e.enabled = (parseInt(t.ENABLED === undefined ? "1" : t.ENABLED, 10) || 0) !== 0;
+        for (const raw of (t.CONDS || []).slice(0, LIM.CONDITIONS)) {
+          const [ty, tgt, va, neg] = splitFields(raw, 4);
+          e.conds.push({ type: condName(condOrd(ty.trim())),
+                         targetID: parseInt(tgt, 10) || 0,
+                         value: parseInt(va, 10) || 0,
+                         negate: !!(parseInt(neg, 10) || 0) });
+        }
+        for (const raw of (t.ACTIONS || []).slice(0, LIM.ACTIONS)) {
+          const [ty, tgt, va, txt] = splitFields(raw, 4);
+          e.actions.push({ type: actName(actOrd(ty.trim())),
+                           targetID: parseInt(tgt, 10) || 0,
+                           value: parseInt(va, 10) || 0,
+                           text: txt.slice(0, LIM.EVENT_TEXT) });
+        }
+        w.events[n] = e;
+      }
     }
     inBlock = false; type = ""; t = null;
   };
@@ -976,6 +1344,16 @@ function readBPL(src) {
       else if (key === "WINPARA") w.winPara = parseInt(val, 10) || 0;
       else if (key === "LOSEPARA") w.losePara = parseInt(val, 10) || 0;
       else if (key === "BOOKLET") w.worldFlags = (parseInt(val, 10) || 0) ? (w.worldFlags | WF_BOOKLET) : (w.worldFlags & ~WF_BOOKLET);
+      else if (key === "FLAGNAME" || key === "COUNTERNAME") {
+        const [n, nm] = splitFields(val, 2);
+        const i = parseInt(n, 10) || 0;
+        const map = key === "FLAGNAME" ? w.flagNames : w.counterNames;
+        const limit = key === "FLAGNAME" ? LIM.FLAGS : LIM.COUNTERS;
+        if (i >= 1 && i <= limit) map[i] = nm.trim().slice(0, LIM.VAR_NAME);
+      }
+      // The only two tags that accumulate; everything else assigns.
+      else if (key === "COND") (t.CONDS = t.CONDS || []).push(val);
+      else if (key === "ACTION") (t.ACTIONS = t.ACTIONS || []).push(val);
       else if (key === "DESCRIPTION") t.DESC = val;
       else t[key] = val;
     }
@@ -1129,6 +1507,145 @@ function validate() {
   const takeable = world.objects.filter(o => o.flags.pickup).length;
   if (takeable > LIM.INVENTORY)
     warn("There are " + takeable + " takeable objects but the player can only carry " + LIM.INVENTORY + " at a time.", "world");
+
+  // Events. Everything an event names is a number, and a number that names
+  // nothing is invisible at run time: FireEvents skips a trigger that never
+  // matches and RunActions skips an action whose target is not there, both
+  // without a word. Mirrors CheckEvents in worldval.pas - the rules follow
+  // the interpreter in events.pas, so the three have to be read together.
+  const hi = eventCount();
+  const needRoom = (id, what, where) => { if (!roomById(id)) err(what + " names room " + id + ", which does not exist.", where); };
+  const needObj = (id, what, where) => { if (!objectById(id)) err(what + " names object " + id + ", which does not exist.", where); };
+  const needMob = (id, what, where) => { if (!mobById(id)) err(what + " names mob " + id + ", which does not exist.", where); };
+  const needFlag = (id, what, where) => { if (!(id >= 1 && id <= LIM.FLAGS)) err(what + " names flag " + id + "; flags run 1 to " + LIM.FLAGS + ".", where); };
+  const needCounter = (id, what, where) => { if (!(id >= 1 && id <= LIM.COUNTERS)) err(what + " names counter " + id + "; counters run 1 to " + LIM.COUNTERS + ".", where); };
+
+  // Does any action anywhere write this flag? An etFlagSet trigger waiting
+  // on a flag nothing sets is the event equivalent of an unreachable room.
+  const writesFlag = (n, want) => eventSlots().some(s =>
+    world.events[s].actions.some(a => (a.targetID | 0) === n &&
+      (a.type === "TOGGLEFLAG" || a.type === (want ? "SETFLAG" : "CLEARFLAG"))));
+  const enablesEvent = n => eventSlots().some(s =>
+    world.events[s].actions.some(a => a.type === "ENABLEEVENT" && (a.targetID | 0) === n));
+
+  for (const s of eventSlots()) {
+    const e = world.events[s], where = "event " + s;
+    // FireEvents walks slots 1..EventCount and stops there.
+    if (s > hi) err("Event is above the event count of " + hi + ", so it never fires.", where);
+    if (!e.name) warn("Event has no name, which makes it hard to find.", where);
+    if (!e.enabled && !enablesEvent(s)) warn("Event starts disabled and nothing enables it.", where);
+
+    // A TriggerID of 0 means "any" and is not a missing reference. A
+    // TriggerID2 set on a trigger whose hook always passes 0 can never
+    // match, so the event is dead rather than merely narrow.
+    const noSecond = () => {
+      if (e.triggerID2 | 0)
+        err("Trigger " + e.trigger + " has no second ID, so this event never fires.", where);
+    };
+    const id1 = e.triggerID | 0, id2 = e.triggerID2 | 0;
+    switch (e.trigger) {
+      case "ENTERROOM": case "FIRSTVISIT":
+        if (id1) needRoom(id1, "Trigger", where); noSecond(); break;
+      case "EXITROOM":
+        // The only trigger with two rooms: the one being left and the one
+        // being entered.
+        if (id1) needRoom(id1, "Trigger", where);
+        if (id2) needRoom(id2, "Trigger destination", where);
+        break;
+      case "TAKEOBJECT": case "DROPOBJECT": case "USEOBJECT": case "EXAMINEOBJECT":
+        if (id1) needObj(id1, "Trigger", where); noSecond(); break;
+      case "USEOBJECTON":
+        // Both sides are objects. Handing something to a person is GIVE,
+        // which has its own trigger.
+        if (id1) needObj(id1, "Trigger", where);
+        if (id2) needObj(id2, "Trigger target", where);
+        break;
+      case "TALKTOMOB":
+        if (id1) needMob(id1, "Trigger", where); noSecond(); break;
+      case "GIVETO":
+        if (id1) needObj(id1, "Trigger", where);
+        if (id2) needMob(id2, "Trigger recipient", where);
+        break;
+      case "TIMER":
+        // The hook runs after the turn counter is incremented, so turn 0
+        // never arrives; with no repeat period either, it waits forever.
+        if (!id1 && !id2) err("Timer fires at turn 0 and never repeats, so it never fires.", where);
+        break;
+      case "FLAGSET": case "FLAGCLEAR":
+        if (id1) {
+          needFlag(id1, "Trigger", where);
+          if (id1 <= LIM.FLAGS && !writesFlag(id1, e.trigger === "FLAGSET"))
+            warn("Waits on flag " + id1 + ", which no action ever writes.", where);
+        }
+        noSecond();
+        break;
+    }
+
+    e.conds.forEach((c, i) => {
+      const what = "Condition " + (i + 1), tgt = c.targetID | 0, val = c.value | 0;
+      switch (c.type) {
+        case "NONE": warn(what + " is empty and always passes.", where); break;
+        case "HASOBJECT": needObj(tgt, what, where); break;
+        case "OBJECTINROOM": needObj(tgt, what, where); needRoom(val, what + " room", where); break;
+        case "MOBINROOM": needMob(tgt, what, where); needRoom(val, what + " room", where); break;
+        case "FLAGISSET": case "FLAGISCLEAR": needFlag(tgt, what, where); break;
+        case "COUNTEREQUALS": case "COUNTERGREATER": case "COUNTERLESS":
+          needCounter(tgt, what, where); break;
+        case "VISITEDROOM": case "ROOMIS": needRoom(tgt, what, where); break;
+      }
+    });
+
+    if (!e.actions.length) warn("Event has no actions, so firing it does nothing.", where);
+    e.actions.forEach((a, i) => {
+      const what = "Action " + (i + 1), tgt = a.targetID | 0, val = a.value | 0;
+      switch (a.type) {
+        case "NONE": warn(what + " is empty and does nothing.", where); break;
+        case "SHOWMESSAGE": if (!a.text) err(what + " shows an empty message.", where); break;
+        case "SHOWPARAGRAPH":
+          if (!tgt) err(what + " shows paragraph 0, which is no paragraph at all.", where);
+          else paraRef(tgt, what, where);
+          break;
+        case "SETFLAG": case "CLEARFLAG": case "TOGGLEFLAG": needFlag(tgt, what, where); break;
+        case "SETCOUNTER": case "ADDCOUNTER": case "SUBCOUNTER": needCounter(tgt, what, where); break;
+        case "MOVEOBJECT": case "SPAWNOBJECT":
+          needObj(tgt, what, where);
+          // Room 0 is what REMOVEOBJECT is for, and is more likely a
+          // forgotten field than a deliberate disappearance.
+          if (!val) warn(what + " moves the object to room 0, taking it out of play.", where);
+          else needRoom(val, what + " destination", where);
+          break;
+        case "REMOVEOBJECT": needObj(tgt, what, where); break;
+        case "MOVEMOB":
+          needMob(tgt, what, where);
+          if (!val) warn(what + " moves the mob to room 0, taking it out of play.", where);
+          else needRoom(val, what + " destination", where);
+          break;
+        case "REMOVEMOB": needMob(tgt, what, where); break;
+        case "LOCKEXIT": case "UNLOCKEXIT": {
+          needRoom(tgt, what, where);
+          // The direction is the low three bits of Value, so it can hold a
+          // number no direction answers to. The engine clamps that to north
+          // rather than crashing - silently locking the wrong door.
+          const d = val & 7;
+          if (d >= DIRS.length) err(what + " has direction " + d + ", which is not a direction.", where);
+          else if (a.type === "UNLOCKEXIT") {
+            const dest = (val >> 3) & 0x1fff;
+            if (!dest) err(what + " opens the " + DIR_LABEL[DIRS[d]] + " exit onto nothing.", where);
+            else needRoom(dest, what + " destination", where);
+          }
+          break;
+        }
+        case "TELEPORTPLAYER": needRoom(tgt, what, where); break;
+        case "ADDSCORE": if (!tgt) warn(what + " awards 0 points.", where); break;
+        case "ENABLEEVENT": case "DISABLEEVENT":
+          if (!(tgt >= 1 && tgt <= LIM.EVENTS))
+            err(what + " names event " + tgt + "; events run 1 to " + LIM.EVENTS + ".", where);
+          else if (!world.events[tgt])
+            err(what + " names event " + tgt + ", which is an empty slot.", where);
+          break;
+      }
+    });
+  }
 
   return out;
 }
@@ -1286,6 +1803,18 @@ function startGame() {
     // objects move around during play, so work on a copy
     place: new Map(world.objects.map(o => [o.id, { roomID: o.roomID, carriedBy: o.carriedBy }])),
     mobPlace: new Map(world.mobs.map(m => [m.id, m.roomID])),
+    // Exits are world definition everywhere else, but LOCKEXIT and UNLOCKEXIT
+    // make them mutable, so the playtest works on a copy too - otherwise a
+    // test run would edit the author's world. It is the same reason save
+    // version 3 stores the exits.
+    exits: new Map(world.rooms.map(r => [r.id, Object.assign({}, r.exits)])),
+    // Event runtime state. evEnabled is seeded from what the author wrote,
+    // which is what SeedEventState does after a load.
+    flags: {},
+    counters: {},
+    fired: new Set(),
+    evEnabled: new Set(eventSlots().filter(s => world.events[s].enabled)),
+    pending: clearOutcome(),
     over: false
   };
   const start = roomById(world.startRoom);
@@ -1293,12 +1822,201 @@ function startGame() {
   if (!start) { say("No start room — set one in the world bar.", "msg"); game.over = true; return; }
   game.talked = new Set();
   showParagraph(world.introPara);
-  game.visited.add(start.id);
-  game.score += start.points | 0;
-  // The start room never goes through move(), so its scene plays here
-  showParagraph(start.firstVisitPara);
+  // The start room never goes through move(), so its arrival runs here -
+  // the same split RunGame has around EnterRoom in gamecore.pas.
+  enterRoom(start);
+  applyOutcome();
   describe();
   updateStatus();
+}
+
+/* ---- The event interpreter, mirroring pascal/src/events.pas -------------
+   Kept beside the command handling rather than with the model, because it
+   is engine code: an author's Events tab never runs any of it. The bounds
+   are the same four the Pascal uses - flag writes are edge-triggered, an
+   event is marked fired before its actions run, depth is capped, and one
+   batch of actions has a budget - so a world that misbehaves here misbehaves
+   the same way in the game. */
+const MAX_EVENT_DEPTH = 4, MAX_TURN_ACTIONS = 256, MAX_PARA_QUEUE = 8;
+let evDepth = 0, evBudget = 0;
+
+function clearOutcome() {
+  return { message: "", paras: [], points: 0, ending: "", teleport: 0 };
+}
+function hasOutcome(o) {
+  return !!(o.message || o.paras.length || o.points || o.ending || o.teleport);
+}
+const flagOK = n => n >= 1 && n <= LIM.FLAGS;
+const counterOK = n => n >= 1 && n <= LIM.COUNTERS;
+const getFlag = n => !!game.flags[n];
+const getCounter = n => game.counters[n] | 0;
+const exitsOf = id => game.exits.get(id) || {};
+
+function evalCondition(c) {
+  const t = c.targetID | 0, v = c.value | 0;
+  let r = false;
+  switch (c.type) {
+    case "NONE": r = true; break;                 // an unused slot never blocks
+    case "HASOBJECT": r = game.inv.includes(t); break;
+    case "OBJECTINROOM": {
+      const p = game.place.get(t);
+      r = !!p && !p.carriedBy && p.roomID === v;
+      break;
+    }
+    case "MOBINROOM": r = game.mobPlace.get(t) === v; break;
+    case "FLAGISSET": r = flagOK(t) && getFlag(t); break;
+    case "FLAGISCLEAR": r = flagOK(t) && !getFlag(t); break;
+    case "COUNTEREQUALS": r = counterOK(t) && getCounter(t) === v; break;
+    case "COUNTERGREATER": r = counterOK(t) && getCounter(t) > v; break;
+    case "COUNTERLESS": r = counterOK(t) && getCounter(t) < v; break;
+    case "VISITEDROOM": r = game.visited.has(t); break;
+    case "ROOMIS": r = game.room === t; break;
+  }
+  return c.negate ? !r : r;
+}
+
+function triggerMatches(e, trig, id1, id2) {
+  if (e.trigger !== trig) return false;
+  const t1 = e.triggerID | 0, t2 = e.triggerID2 | 0;
+  if (trig === "TIMER") {
+    // The hook runs after the turn counter is incremented, so meta commands
+    // do not advance a timer.
+    if (game.turns < t1) return false;
+    if (game.turns === t1) return true;
+    return t2 > 0 && (game.turns - t1) % t2 === 0;
+  }
+  if (t1 && t1 !== id1) return false;             // 0 means "any"
+  if (t2 && t2 !== id2) return false;
+  return true;
+}
+
+// Edge-triggered: setting a flag that is already set fires nothing. That
+// alone stops the common runaway; the depth and budget bounds are for
+// TOGGLEFLAG, which can still oscillate.
+function writeFlag(n, val) {
+  if (!flagOK(n) || getFlag(n) === val) return;
+  game.flags[n] = val;
+  fireEvents(val ? "FLAGSET" : "FLAGCLEAR", n, 0);
+}
+function setCounter(n, v) {
+  if (!counterOK(n)) return;
+  game.counters[n] = Math.max(-32768, Math.min(32767, v | 0));
+}
+
+function runActions(e) {
+  const o = game.pending;
+  for (const a of e.actions) {
+    if (evBudget <= 0) return;
+    evBudget--;
+    const t = a.targetID | 0, v = a.value | 0;
+    switch (a.type) {
+      case "SHOWMESSAGE":
+        if (a.text) o.message = o.message ? o.message + " " + a.text : a.text;
+        break;
+      case "SHOWPARAGRAPH":
+        if (t && o.paras.length < MAX_PARA_QUEUE) o.paras.push(t);
+        break;
+      case "SETFLAG": writeFlag(t, true); break;
+      case "CLEARFLAG": writeFlag(t, false); break;
+      case "TOGGLEFLAG": if (flagOK(t)) writeFlag(t, !getFlag(t)); break;
+      case "SETCOUNTER": setCounter(t, v); break;
+      case "ADDCOUNTER": if (counterOK(t)) setCounter(t, getCounter(t) + v); break;
+      case "SUBCOUNTER": if (counterOK(t)) setCounter(t, getCounter(t) - v); break;
+      case "MOVEOBJECT": case "SPAWNOBJECT":
+        if (game.place.has(t)) {
+          game.place.set(t, { roomID: v, carriedBy: 0 });
+          const held = game.inv.indexOf(t);
+          if (held >= 0) game.inv.splice(held, 1);
+        }
+        break;
+      // Moves the object out of play but never marks it inactive: the save
+      // format writes one record per active object and checks the body
+      // length against the count, so clearing it would make every existing
+      // save read as truncated.
+      case "REMOVEOBJECT":
+        if (game.place.has(t)) {
+          game.place.set(t, { roomID: 0, carriedBy: 0 });
+          const held = game.inv.indexOf(t);
+          if (held >= 0) game.inv.splice(held, 1);
+        }
+        break;
+      case "MOVEMOB": if (game.mobPlace.has(t)) game.mobPlace.set(t, v); break;
+      case "REMOVEMOB": if (game.mobPlace.has(t)) game.mobPlace.set(t, 0); break;
+      case "LOCKEXIT": case "UNLOCKEXIT": {
+        const d = v & 7;
+        if (d >= DIRS.length) break;
+        const ex = game.exits.get(t);
+        // Locking discards the destination, which is why unlock has to name
+        // it again.
+        if (ex) ex[DIRS[d]] = a.type === "LOCKEXIT" ? 0 : (v >> 3) & 0x1fff;
+        break;
+      }
+      // Recorded rather than applied: the room change has to run through the
+      // arrival machinery, which knows about first-visit scoring and scenes.
+      case "TELEPORTPLAYER": o.teleport = t; break;
+      case "ADDSCORE": o.points += t; break;
+      case "ENDGAME": o.ending = v === 0 ? "win" : "lose"; break;
+      case "ENABLEEVENT": if (world.events[t]) game.evEnabled.add(t); break;
+      case "DISABLEEVENT": game.evEnabled.delete(t); break;
+    }
+  }
+}
+
+// Every matching event fires, in ascending slot order - not just the first.
+// That is how an author writes more actions than one event holds: two events
+// sharing a trigger.
+function fireEvents(trig, id1, id2) {
+  if (!game || evDepth >= MAX_EVENT_DEPTH) return;
+  const outermost = evDepth === 0;
+  if (outermost) evBudget = MAX_TURN_ACTIONS;   // a cascade shares the budget
+  evDepth++;
+  for (const s of eventSlots()) {
+    if (evBudget <= 0) break;
+    const e = world.events[s];
+    if (!game.evEnabled.has(s)) continue;
+    if (e.oneShot && game.fired.has(s)) continue;
+    if (!triggerMatches(e, trig, id1 | 0, id2 | 0)) continue;
+    if (!e.conds.every(evalCondition)) continue;
+    game.fired.add(s);      // before the actions run, so it cannot re-enter
+    runActions(e);
+  }
+  evDepth--;
+}
+
+// Everything that happens on arriving in a room, so no caller can do half of
+// it. Mirrors EnterRoom in gamecore.pas; returns the points awarded.
+function enterRoom(room) {
+  fireEvents("ENTERROOM", room.id, 0);
+  if (game.visited.has(room.id)) return;
+  game.visited.add(room.id);
+  game.score += room.points | 0;
+  showParagraph(room.firstVisitPara);
+  fireEvents("FIRSTVISIT", room.id, 0);
+}
+
+// Drained between the command and the next description - the same scene
+// boundary ApplyOutcome uses, because a paragraph interrupts the flow.
+function applyOutcome() {
+  if (!hasOutcome(game.pending)) return;
+  // Taken and cleared first: a teleport re-enters enterRoom, which can fire
+  // more events, and those belong to the next drain.
+  const o = game.pending;
+  game.pending = clearOutcome();
+
+  if (o.message) say(o.message, "msg");
+  if (o.points) { game.score += o.points; say("[+" + o.points + "]", "msg"); }
+  for (const n of o.paras) showParagraph(n);
+  if (o.teleport) {
+    const dest = roomById(o.teleport);
+    if (dest) { game.room = o.teleport; enterRoom(dest); describe(); }
+  }
+  if (o.ending === "win") { game.over = true; winScreen(); }
+  else if (o.ending === "lose") {
+    game.over = true;
+    showParagraph(world.losePara);
+    say("");
+    say("*** THE ADVENTURE ENDS ***", "msg");
+  }
 }
 
 // Every story paragraph reaches the player through here, so booklet mode is
@@ -1343,7 +2061,9 @@ function describe() {
   const objs = objectsHere();
   if (objs.length) say("You see: " + objs.map(o => o.name).join(", "), "ob");
   for (const m of mobsHere()) say(m.name + " is here.", "mb");
-  const exits = DIRS.filter(d => r.exits[d]).map(d => DIR_LABEL[d]);
+  // The live exits, not the authored ones: LOCKEXIT and UNLOCKEXIT move them.
+  const ex = exitsOf(game.room);
+  const exits = DIRS.filter(d => ex[d]).map(d => DIR_LABEL[d]);
   say("Exits: " + (exits.length ? exits.join(" ") : "None"), "ex");
 }
 
@@ -1354,10 +2074,8 @@ const findCarried = noun => carried().find(o => matches(o.name, noun)) || null;
 const findVisible = noun => findHere(noun) || findCarried(noun);
 const findMob = noun => mobsHere().find(m => matches(m.name, noun)) || null;
 
-function checkWin() {
-  if (!world.winRoomID || game.room !== world.winRoomID) return;
-  if (world.winObjectID && !game.inv.includes(world.winObjectID)) return;
-  game.over = true;
+// Also reached by an ENDGAME action, so it is its own function.
+function winScreen() {
   showParagraph(world.winPara);
   say("");
   say("*** YOU HAVE WON ***", "win");
@@ -1366,23 +2084,30 @@ function checkWin() {
   say("Turns taken: " + game.turns, "msg");
 }
 
+function checkWin() {
+  if (!world.winRoomID || game.room !== world.winRoomID) return;
+  if (world.winObjectID && !game.inv.includes(world.winObjectID)) return;
+  game.over = true;
+  winScreen();
+}
+
 function move(dir) {
   const r = roomById(game.room);
   if (!r) { say("Error: Current room not found!", "msg"); return; }
-  const target = r.exits[dir] | 0;
+  const target = exitsOf(game.room)[dir] | 0;
   if (!target) { say("You cannot go that way.", "msg"); return; }
   const dest = roomById(target);
   if (!dest) { say("That path leads nowhere.", "msg"); return; }
+  // Fired before the move, with the room being left, so a ROOMIS condition
+  // still names the room the player is walking out of.
+  fireEvents("EXITROOM", r.id, target);
   game.room = target;
-  let msg = "You go " + DIR_LABEL[dir] + ".";
-  let arrival = 0;
-  if (!game.visited.has(target)) {
-    game.visited.add(target);
-    if (dest.points > 0) { game.score += dest.points; msg += " [+" + dest.points + "]"; }
-    arrival = dest.firstVisitPara | 0;
-  }
-  say(msg, "msg");
-  showParagraph(arrival);
+  // The move is reported before the arrival scene, which is the order the
+  // screen shows: gamecore builds LastMessage and the next ShowRoom draws it.
+  const first = !game.visited.has(target);
+  say("You go " + DIR_LABEL[dir] + "." +
+      (first && dest.points > 0 ? " [+" + dest.points + "]" : ""), "msg");
+  enterRoom(dest);
   describe();
 }
 
@@ -1392,6 +2117,7 @@ function runCommand(input) {
   const sp = trimmed.indexOf(" ");
   const verb = (sp < 0 ? trimmed : trimmed.slice(0, sp)).toUpperCase();
   let noun = sp < 0 ? "" : trimmed.slice(sp + 1).trim();
+  let noun2 = "";
   let cmd = null;
 
   if (verb === "LOOK" && /^AT\s+/i.test(noun)) { noun = noun.replace(/^AT\s+/i, "").trim(); cmd = "examine"; }
@@ -1409,11 +2135,25 @@ function runCommand(input) {
   else if (verb === "OPEN") cmd = "open";
   else if (verb === "READ") cmd = "read";
   else if (["TALK", "SAY", "SPEAK"].includes(verb)) cmd = "talk";
+  else if (["GIVE", "OFFER"].includes(verb)) cmd = "give";
   else if (["I", "INV", "INVENTORY"].includes(verb)) cmd = "inventory";
   else if (verb === "SCORE") cmd = "score";
   else if (["SAVE", "LOAD", "RESTORE"].includes(verb)) cmd = "meta";
   else if (verb === "") cmd = "none";
   else cmd = "unknown";
+
+  // Only USE and GIVE take a second object. Splitting every noun would leave
+  // TALK TO WIZARD with no noun and turn DROP TORCH ON FLOOR into two things.
+  if (cmd === "use" || cmd === "give") {
+    const preps = cmd === "use" ? [" ON ", " WITH ", " TO "] : [" TO ", " ON "];
+    for (const prep of preps) {
+      const at = noun.toUpperCase().indexOf(prep);
+      if (at < 0) continue;
+      noun2 = noun.slice(at + prep.length).trim();
+      noun = noun.slice(0, at).trim();
+      break;
+    }
+  }
 
   const usesTurn = !["none", "unknown", "score", "meta"].includes(cmd);
 
@@ -1424,7 +2164,11 @@ function runCommand(input) {
     case "examine": {
       if (!noun) { say("Examine what?", "msg"); break; }
       const o = findVisible(noun);
-      if (o) { say(o.desc || "You see nothing special.", "msg"); break; }
+      if (o) {
+        say(o.desc || "You see nothing special.", "msg");
+        fireEvents("EXAMINEOBJECT", o.id, 0);
+        break;
+      }
       const m = findMob(noun);
       say(m ? (m.desc || "You see nothing special.") : "You don't see that here.", "msg");
       break;
@@ -1449,6 +2193,7 @@ function runCommand(input) {
       }
       say(msg, "msg");
       showParagraph(firstTake);
+      fireEvents("TAKEOBJECT", o.id, 0);
       break;
     }
     case "drop": {
@@ -1458,6 +2203,7 @@ function runCommand(input) {
       game.inv.splice(game.inv.indexOf(o.id), 1);
       game.place.set(o.id, { roomID: game.room, carriedBy: 0 });
       say("You drop the " + o.name + ".", "msg");
+      fireEvents("DROPOBJECT", o.id, 0);
       break;
     }
     case "use": case "open": case "read": {
@@ -1469,7 +2215,40 @@ function runCommand(input) {
                            : "You can't " + cmd + " that.", "msg");
         break;
       }
+      // USE X ON Y. The second target is always an object - handing
+      // something to a person is GIVE, which has its own trigger - so an
+      // event's TriggerID2 names an object and the check can treat it as one.
+      if (cmd === "use" && noun2) {
+        const tgt = findVisible(noun2);
+        if (!tgt) {
+          say(findMob(noun2) ? "Try giving it to them instead."
+                             : "You don't see that here.", "msg");
+          break;
+        }
+        // No useText: that line describes using the object on its own and
+        // would contradict whatever the event goes on to say.
+        say("You use the " + o.name + " on the " + tgt.name + ".", "msg");
+        fireEvents("USEOBJECTON", o.id, tgt.id);
+        break;
+      }
       say(o.useText || "You " + cmd + " the " + o.name + ".", "msg");
+      if (cmd === "use") fireEvents("USEOBJECT", o.id, 0);
+      break;
+    }
+    // GIVE moves nothing by itself. What a gift means is the author's
+    // decision, so the transfer belongs in the event's actions; an item
+    // silently swallowed by an NPC nobody wrote a response for could strand
+    // the game.
+    case "give": {
+      if (!noun) { say("Give what?", "msg"); break; }
+      const o = findCarried(noun);
+      if (!o) { say("You don't have that.", "msg"); break; }
+      if (!noun2) { say("Give the " + o.name + " to whom?", "msg"); break; }
+      const m = findMob(noun2);
+      if (!m) { say("There's no one here by that name.", "msg"); break; }
+      fireEvents("GIVETO", o.id, m.id);
+      if (!hasOutcome(game.pending))
+        say(m.name + " does not want the " + o.name + ".", "msg");
       break;
     }
     case "talk": {
@@ -1482,6 +2261,7 @@ function runCommand(input) {
         game.talked.add(m.id);
         showParagraph(m.firstTalkPara | 0);
       }
+      fireEvents("TALKTOMOB", m.id, 0);
       break;
     }
     case "inventory": {
@@ -1501,7 +2281,13 @@ function runCommand(input) {
       break;
   }
 
-  if (usesTurn) game.turns++;
+  // Inside the turn-consuming branch on purpose, so a timer inherits the
+  // meta-command exclusion for free: SCORE, SAVE and LOAD do not tick.
+  if (usesTurn) {
+    game.turns++;
+    fireEvents("TIMER", 0, 0);
+  }
+  applyOutcome();
   if (!game.over) checkWin();
   updateStatus();
 }
@@ -1542,6 +2328,7 @@ function showTab(name) {
     setTimeout(() => $("cmdInput").focus(), 0);
   }
   if (name === "story") renderParaList();
+  if (name === "events") renderEventList();
   if (["rooms", "objects", "mobs"].includes(name)) renderList(name);
 }
 
@@ -1569,6 +2356,7 @@ function renderWorldBar() {
   $("bObjects").textContent = world.objects.length;
   $("bMobs").textContent = world.mobs.length;
   $("bParas").textContent = paraNumbers().length;
+  $("bEvents").textContent = eventSlots().length;
   const issues = validate();
   const bad = issues.filter(i => i.level === "error").length;
   const badge = $("bIssues");
@@ -1580,6 +2368,7 @@ function renderAll() {
   renderWorldBar();
   ["rooms", "objects", "mobs"].forEach(renderList);
   renderParaList();
+  renderEventList();
   const active = document.querySelector("nav button[aria-selected=true]");
   if (active && active.dataset.tab === "map") renderMap();
   if (active && active.dataset.tab === "check") renderIssues();
@@ -1936,6 +2725,468 @@ function addParagraph() {
   setTimeout(() => { const t = $("p-text"); if (t) t.focus(); }, 0);
 }
 
+
+/* ============================================================================
+   Events tab
+
+   The one screen in this editor that is a program rather than a form. Its job
+   is to keep an author from having to know the encodings: which of a
+   trigger's two IDs means what, that a locked exit packs a direction and a
+   destination into one number, and which flag 7 is. Every field that names an
+   entity is a picker, so a reference that does not exist is a thing you
+   cannot type rather than a thing the Check tab tells you about later.
+   ========================================================================== */
+let selEvent = null;
+
+// What each condition and action type actually uses, so the form can show
+// those fields and nothing else. The kinds line up with the interpreter in
+// events.pas: "num" is a plain number, everything else is a picker.
+const COND_SPEC = {
+  NONE:           { label: "Nothing (always passes)" },
+  HASOBJECT:      { label: "Player is carrying", target: "object" },
+  OBJECTINROOM:   { label: "Object is in room", target: "object", value: "room" },
+  MOBINROOM:      { label: "Mob is in room", target: "mob", value: "room" },
+  FLAGISSET:      { label: "Flag is set", target: "flag" },
+  FLAGISCLEAR:    { label: "Flag is clear", target: "flag" },
+  COUNTEREQUALS:  { label: "Counter equals", target: "counter", value: "num" },
+  COUNTERGREATER: { label: "Counter is more than", target: "counter", value: "num" },
+  COUNTERLESS:    { label: "Counter is less than", target: "counter", value: "num" },
+  VISITEDROOM:    { label: "Player has visited", target: "room" },
+  ROOMIS:         { label: "Player is in", target: "room" }
+};
+const ACT_SPEC = {
+  NONE:           { label: "Nothing" },
+  SHOWMESSAGE:    { label: "Show a message", text: true },
+  SHOWPARAGRAPH:  { label: "Show a paragraph", target: "para" },
+  SETFLAG:        { label: "Set flag", target: "flag" },
+  CLEARFLAG:      { label: "Clear flag", target: "flag" },
+  TOGGLEFLAG:     { label: "Toggle flag", target: "flag" },
+  SETCOUNTER:     { label: "Set counter to", target: "counter", value: "num" },
+  ADDCOUNTER:     { label: "Add to counter", target: "counter", value: "num" },
+  SUBCOUNTER:     { label: "Subtract from counter", target: "counter", value: "num" },
+  MOVEOBJECT:     { label: "Move object to room", target: "object", value: "room" },
+  SPAWNOBJECT:    { label: "Place object in room", target: "object", value: "room" },
+  REMOVEOBJECT:   { label: "Take object out of play", target: "object" },
+  MOVEMOB:        { label: "Move mob to room", target: "mob", value: "room" },
+  REMOVEMOB:      { label: "Take mob out of play", target: "mob" },
+  LOCKEXIT:       { label: "Lock an exit", target: "room", value: "exit" },
+  UNLOCKEXIT:     { label: "Unlock an exit", target: "room", value: "exit" },
+  TELEPORTPLAYER: { label: "Move the player to", target: "room" },
+  ADDSCORE:       { label: "Award points", target: "num" },
+  ENDGAME:        { label: "End the game", value: "ending" },
+  ENABLEEVENT:    { label: "Enable event", target: "event" },
+  DISABLEEVENT:   { label: "Disable event", target: "event" }
+};
+// What a trigger's two IDs mean. Empty means the field is not used, and the
+// form hides it - a TriggerID2 the engine never matches would make the event
+// dead, which is exactly what the Check tab reports.
+const TRIG_SPEC = {
+  ENTERROOM:     { one: "room", label1: "Room entered" },
+  EXITROOM:      { one: "room", two: "room", label1: "Room left", label2: "Room entered" },
+  FIRSTVISIT:    { one: "room", label1: "Room" },
+  TAKEOBJECT:    { one: "object", label1: "Object taken" },
+  DROPOBJECT:    { one: "object", label1: "Object dropped" },
+  USEOBJECT:     { one: "object", label1: "Object used" },
+  USEOBJECTON:   { one: "object", two: "object", label1: "Object used", label2: "Used on" },
+  EXAMINEOBJECT: { one: "object", label1: "Object examined" },
+  TALKTOMOB:     { one: "mob", label1: "Mob" },
+  GIVETO:        { one: "object", two: "mob", label1: "Object given", label2: "Given to" },
+  TIMER:         { one: "num", two: "num", label1: "Fires on turn", label2: "Then every (0 = once)" },
+  FLAGSET:       { one: "flag", label1: "Flag set" },
+  FLAGCLEAR:     { one: "flag", label1: "Flag cleared" }
+};
+const TRIG_LABEL = {
+  ENTERROOM: "Player enters a room", EXITROOM: "Player leaves a room",
+  FIRSTVISIT: "Player's first visit to a room", TAKEOBJECT: "Player takes an object",
+  DROPOBJECT: "Player drops an object", USEOBJECT: "Player uses an object",
+  USEOBJECTON: "Player uses one thing on another", EXAMINEOBJECT: "Player examines an object",
+  TALKTOMOB: "Player talks to a mob", GIVETO: "Player gives something to a mob",
+  TIMER: "A number of turns have passed", FLAGSET: "A flag becomes set",
+  FLAGCLEAR: "A flag becomes clear"
+};
+
+function objectOptions(cur) {
+  let h = '<option value="0"' + (cur ? "" : " selected") + ">— any —</option>";
+  for (const o of world.objects)
+    h += '<option value="' + o.id + '"' + (o.id === cur ? " selected" : "") + ">" +
+         o.id + " — " + escapeHtml(o.name || "(unnamed)") + "</option>";
+  if (cur && !objectById(cur)) h += '<option value="' + cur + '" selected>' + cur + " — (missing object)</option>";
+  return h;
+}
+function mobOptions(cur) {
+  let h = '<option value="0"' + (cur ? "" : " selected") + ">— any —</option>";
+  for (const m of world.mobs)
+    h += '<option value="' + m.id + '"' + (m.id === cur ? " selected" : "") + ">" +
+         m.id + " — " + escapeHtml(m.name || "(unnamed)") + "</option>";
+  if (cur && !mobById(cur)) h += '<option value="' + cur + '" selected>' + cur + " — (missing mob)</option>";
+  return h;
+}
+function paraOptions(cur) {
+  let h = '<option value="0"' + (cur ? "" : " selected") + ">— none —</option>";
+  for (const n of paraNumbers())
+    h += '<option value="' + n + '"' + (n === cur ? " selected" : "") + ">" +
+         n + " — " + escapeHtml(paraPreview(world.paragraphs[n]).slice(0, 40)) + "</option>";
+  if (cur && !world.paragraphs[cur]) h += '<option value="' + cur + '" selected>' + cur + " — (empty slot)</option>";
+  return h;
+}
+function eventOptions(cur) {
+  let h = '<option value="0"' + (cur ? "" : " selected") + ">— none —</option>";
+  for (const n of eventSlots())
+    h += '<option value="' + n + '"' + (n === cur ? " selected" : "") + ">" +
+         n + " — " + escapeHtml(world.events[n].name || "(unnamed)") + "</option>";
+  if (cur && !world.events[cur]) h += '<option value="' + cur + '" selected>' + cur + " — (empty slot)</option>";
+  return h;
+}
+// A flag or counter is a number and a name the author gave it. Both are
+// edited here, where the number is used, so naming one never means going to
+// look for another screen.
+function varOptions(cur, limit, names) {
+  let h = '<option value="0"' + (cur ? "" : " selected") + ">— none —</option>";
+  for (let i = 1; i <= limit; i++) {
+    if (!names[i] && i !== cur) continue;
+    h += '<option value="' + i + '"' + (i === cur ? " selected" : "") + ">" +
+         i + (names[i] ? " — " + escapeHtml(names[i]) : "") + "</option>";
+  }
+  h += '<option value="new">+ a new one…</option>';
+  return h;
+}
+function firstFreeVar(limit, names) {
+  for (let i = 1; i <= limit; i++) if (!names[i]) return i;
+  return 0;
+}
+
+// Everything a picker of a given kind needs: the markup, and how to read it
+// back. Keeping the two together is what stops a field being written to one
+// place and read from another.
+function pickerHtml(kind, id, val) {
+  switch (kind) {
+    case "room": return '<select id="' + id + '">' + roomOptions(val, true, "— any —") + "</select>";
+    case "object": return '<select id="' + id + '">' + objectOptions(val) + "</select>";
+    case "mob": return '<select id="' + id + '">' + mobOptions(val) + "</select>";
+    case "para": return '<select id="' + id + '">' + paraOptions(val) + "</select>";
+    case "event": return '<select id="' + id + '">' + eventOptions(val) + "</select>";
+    case "flag": return '<select id="' + id + '">' + varOptions(val, LIM.FLAGS, world.flagNames) + "</select>";
+    case "counter": return '<select id="' + id + '">' + varOptions(val, LIM.COUNTERS, world.counterNames) + "</select>";
+    default: return '<input type="number" id="' + id + '" step="1" value="' + (val | 0) + '">';
+  }
+}
+const pickerLabel = { room: "Room", object: "Object", mob: "Mob", para: "Paragraph",
+                      event: "Event", flag: "Flag", counter: "Counter", num: "Value" };
+
+function renderEventList() {
+  const ul = $("listEvents");
+  if (!ul) return;
+  const slots = eventSlots();
+  ul.innerHTML = "";
+  if (!slots.length) {
+    ul.innerHTML = '<li class="empty" style="cursor:default">No events yet.</li>';
+  } else {
+    for (const n of slots) {
+      const e = world.events[n];
+      const li = document.createElement("li");
+      li.setAttribute("aria-current", String(selEvent === n));
+      li.innerHTML = '<span class="id"></span><span class="nm"></span><span class="tag"></span>';
+      li.querySelector(".id").textContent = n;
+      li.querySelector(".nm").textContent = e.name || "(unnamed)";
+      li.querySelector(".tag").textContent = e.trigger.toLowerCase() +
+        (e.enabled ? "" : " · off");
+      li.addEventListener("click", () => { selEvent = n; renderEventList(); });
+      ul.appendChild(li);
+    }
+  }
+  renderEventForm();
+}
+
+function renderEventForm() {
+  const box = $("formEvent");
+  if (!box) return;
+  const n = selEvent;
+  const e = n && world.events[n];
+  if (!e) {
+    box.innerHTML = '<p class="empty">Select an event, or add a new one.</p>';
+    return;
+  }
+  const spec = TRIG_SPEC[e.trigger] || {};
+
+  let h = "<h3>Event " + n + "</h3>";
+  h += '<div class="row">' +
+    '<div class="field" style="flex:2 1 220px"><label for="e-name">Name</label>' +
+    '<input type="text" id="e-name" maxlength="' + LIM.EVENT_NAME + '" value="' + escapeHtml(e.name) + '"></div>' +
+    '<div class="field" style="flex:0 0 110px"><label for="e-slot">Slot</label>' +
+    '<input type="number" id="e-slot" min="1" max="' + LIM.EVENTS + '" step="1" value="' + n + '"></div>' +
+    "</div>";
+  h += '<p class="hint">The slot number is this event\'s identity. A save game records ' +
+       'which events have fired by slot, so moving or deleting one changes what every ' +
+       'existing save means.</p>';
+
+  h += '<div class="field"><label for="e-trigger">Happens when</label><select id="e-trigger">';
+  for (const t of TRIGGERS)
+    h += '<option value="' + t + '"' + (t === e.trigger ? " selected" : "") + ">" +
+         escapeHtml(TRIG_LABEL[t]) + "</option>";
+  h += "</select></div>";
+
+  h += '<div class="row">';
+  if (spec.one)
+    h += '<div class="field"><label for="e-id1">' + spec.label1 + "</label>" +
+         pickerHtml(spec.one, "e-id1", e.triggerID | 0) + "</div>";
+  if (spec.two)
+    h += '<div class="field"><label for="e-id2">' + spec.label2 + "</label>" +
+         pickerHtml(spec.two, "e-id2", e.triggerID2 | 0) + "</div>";
+  h += "</div>";
+
+  h += '<div class="row">' +
+    '<div class="field"><label for="e-oneshot">Repeats</label><select id="e-oneshot">' +
+    '<option value="1"' + (e.oneShot ? " selected" : "") + ">Fires once only</option>" +
+    '<option value="0"' + (e.oneShot ? "" : " selected") + ">Fires every time</option>" +
+    "</select></div>" +
+    '<div class="field"><label for="e-enabled">At the start of the game</label><select id="e-enabled">' +
+    '<option value="1"' + (e.enabled ? " selected" : "") + ">Enabled</option>" +
+    '<option value="0"' + (e.enabled ? "" : " selected") + ">Disabled, until another event enables it</option>" +
+    "</select></div></div>";
+
+  // Conditions
+  h += "<h3>Conditions</h3>";
+  h += '<p class="hint">All of them must hold, or the actions do not run.</p>';
+  e.conds.forEach((c, i) => {
+    const cs = COND_SPEC[c.type] || {};
+    h += '<div class="row" style="align-items:flex-end">' +
+      '<div class="field" style="flex:2 1 200px"><label for="c-t-' + i + '">Condition ' + (i + 1) + "</label>" +
+      '<select id="c-t-' + i + '">';
+    for (const k of CONDS)
+      h += '<option value="' + k + '"' + (k === c.type ? " selected" : "") + ">" +
+           escapeHtml(COND_SPEC[k].label) + "</option>";
+    h += "</select></div>";
+    if (cs.target)
+      h += '<div class="field"><label for="c-a-' + i + '">' + pickerLabel[cs.target] + "</label>" +
+           pickerHtml(cs.target, "c-a-" + i, c.targetID | 0) + "</div>";
+    if (cs.value)
+      h += '<div class="field"><label for="c-v-' + i + '">' + pickerLabel[cs.value] + "</label>" +
+           pickerHtml(cs.value, "c-v-" + i, c.value | 0) + "</div>";
+    h += '<div class="field" style="flex:0 0 90px"><label for="c-n-' + i + '">Invert</label>' +
+         '<select id="c-n-' + i + '"><option value="0"' + (c.negate ? "" : " selected") + ">No</option>" +
+         '<option value="1"' + (c.negate ? " selected" : "") + ">NOT</option></select></div>";
+    h += '<div class="field" style="flex:0 0 44px"><label>&nbsp;</label>' +
+         '<button class="danger" id="c-x-' + i + '" title="Remove this condition">&times;</button></div>';
+    h += "</div>";
+  });
+  if (e.conds.length < LIM.CONDITIONS)
+    h += '<button id="c-add">+ Add condition</button>';
+  else
+    h += '<p class="hint">All ' + LIM.CONDITIONS + ' condition slots are used.</p>';
+
+  // Actions
+  h += "<h3>Actions</h3>";
+  h += '<p class="hint">They run in order. Every event whose trigger matches fires, ' +
+       'not just the first — two events sharing a trigger is how you write more than ' +
+       LIM.ACTIONS + ' actions for one moment.</p>';
+  e.actions.forEach((a, i) => {
+    const as = ACT_SPEC[a.type] || {};
+    h += '<div class="row" style="align-items:flex-end">' +
+      '<div class="field" style="flex:2 1 200px"><label for="a-t-' + i + '">Action ' + (i + 1) + "</label>" +
+      '<select id="a-t-' + i + '">';
+    for (const k of ACTS)
+      h += '<option value="' + k + '"' + (k === a.type ? " selected" : "") + ">" +
+           escapeHtml(ACT_SPEC[k].label) + "</option>";
+    h += "</select></div>";
+    if (as.target)
+      h += '<div class="field"><label for="a-a-' + i + '">' + pickerLabel[as.target] + "</label>" +
+           pickerHtml(as.target, "a-a-" + i, a.targetID | 0) + "</div>";
+    if (as.value === "exit") {
+      // The direction and the destination share one number, the direction in
+      // the low three bits. Locking discards the destination, which is why
+      // unlocking has to name it again.
+      const d = (a.value | 0) & 7, dest = ((a.value | 0) >> 3) & 0x1fff;
+      h += '<div class="field"><label for="a-d-' + i + '">Direction</label><select id="a-d-' + i + '">';
+      DIRS.forEach((dir, k) => {
+        h += '<option value="' + k + '"' + (k === d ? " selected" : "") + ">" + DIR_LABEL[dir] + "</option>";
+      });
+      h += "</select></div>";
+      if (a.type === "UNLOCKEXIT")
+        h += '<div class="field"><label for="a-e-' + i + '">Leads to</label>' +
+             '<select id="a-e-' + i + '">' + roomOptions(dest, true, "— nowhere —") + "</select></div>";
+    } else if (as.value === "ending") {
+      h += '<div class="field"><label for="a-v-' + i + '">Ending</label><select id="a-v-' + i + '">' +
+           '<option value="0"' + ((a.value | 0) ? "" : " selected") + ">The player wins</option>" +
+           '<option value="1"' + ((a.value | 0) ? " selected" : "") + ">The adventure ends</option>" +
+           "</select></div>";
+    } else if (as.value) {
+      h += '<div class="field"><label for="a-v-' + i + '">' + pickerLabel[as.value] + "</label>" +
+           pickerHtml(as.value, "a-v-" + i, a.value | 0) + "</div>";
+    }
+    h += '<div class="field" style="flex:0 0 44px"><label>&nbsp;</label>' +
+         '<button class="danger" id="a-x-' + i + '" title="Remove this action">&times;</button></div>';
+    h += "</div>";
+    if (as.text)
+      h += '<div class="field"><label for="a-s-' + i + '">Message ' +
+           '<span class="counter" id="c-a-s-' + i + '"></span></label>' +
+           '<input type="text" id="a-s-' + i + '" value="' + escapeHtml(a.text) + '"></div>' +
+           '<p class="hint">One line, up to ' + LIM.EVENT_TEXT +
+           ' characters. Anything longer belongs in a paragraph, which the ' +
+           "booklet can print.</p>";
+  });
+  if (e.actions.length < LIM.ACTIONS)
+    h += '<button id="a-add">+ Add action</button>';
+  else
+    h += '<p class="hint">All ' + LIM.ACTIONS + ' action slots are used.</p>';
+
+  h += '<div class="formfoot"><span class="spacer"></span>' +
+       '<button class="danger" id="e-delete">Delete event</button></div>';
+  box.innerHTML = h;
+
+  /* ---- wiring ---- */
+  const touched = () => { renderWorldBar(); renderEventList(); };
+
+  $("e-name").addEventListener("input", () => {
+    e.name = $("e-name").value.slice(0, LIM.EVENT_NAME);
+    renderWorldBar();
+    const rows = $("listEvents").querySelectorAll("li");
+    const idx = eventSlots().indexOf(n);
+    if (idx >= 0 && rows[idx]) rows[idx].querySelector(".nm").textContent = e.name || "(unnamed)";
+  });
+
+  $("e-slot").addEventListener("change", () => {
+    const want = parseInt($("e-slot").value, 10) || 0;
+    if (want === n) return;
+    if (want < 1 || want > LIM.EVENTS) {
+      toast("Event slots run 1 to " + LIM.EVENTS + ".", true);
+      $("e-slot").value = n; return;
+    }
+    if (world.events[want]) {
+      toast("Slot " + want + " is already used.", true);
+      $("e-slot").value = n; return;
+    }
+    // Enable and disable actions name a slot, so they have to move with it.
+    for (const s of eventSlots())
+      for (const a of world.events[s].actions)
+        if ((a.type === "ENABLEEVENT" || a.type === "DISABLEEVENT") && (a.targetID | 0) === n)
+          a.targetID = want;
+    world.events[want] = e;
+    delete world.events[n];
+    selEvent = want;
+    touched();
+    toast("Moved to slot " + want + ". Existing save games still point at slot " + n + ".");
+  });
+
+  $("e-trigger").addEventListener("change", () => {
+    e.trigger = $("e-trigger").value;
+    // The IDs mean something different now, and carrying the old numbers over
+    // would quietly point the event at the wrong thing.
+    e.triggerID = 0;
+    e.triggerID2 = 0;
+    touched();
+  });
+
+  const bindTriggerId = (id, field, kind) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", () => {
+      if (el.value === "new") {
+        const names = kind === "flag" ? world.flagNames : world.counterNames;
+        const limit = kind === "flag" ? LIM.FLAGS : LIM.COUNTERS;
+        const free = firstFreeVar(limit, names);
+        if (!free) { toast("All " + limit + " are used.", true); touched(); return; }
+        names[free] = kind + " " + free;
+        e[field] = free;
+      } else e[field] = parseInt(el.value, 10) || 0;
+      touched();
+    });
+  };
+  if (spec.one) bindTriggerId("e-id1", "triggerID", spec.one);
+  if (spec.two) bindTriggerId("e-id2", "triggerID2", spec.two);
+
+  $("e-oneshot").addEventListener("change", () => { e.oneShot = $("e-oneshot").value === "1"; touched(); });
+  $("e-enabled").addEventListener("change", () => { e.enabled = $("e-enabled").value === "1"; touched(); });
+
+  // A flag or counter picker can mint a new one, so the number and the name
+  // are chosen in the same place.
+  const bindVarPicker = (el, set, kind) => {
+    el.addEventListener("change", () => {
+      if (el.value === "new") {
+        const names = kind === "flag" ? world.flagNames : world.counterNames;
+        const limit = kind === "flag" ? LIM.FLAGS : LIM.COUNTERS;
+        const free = firstFreeVar(limit, names);
+        if (!free) { toast("All " + limit + " are used.", true); touched(); return; }
+        names[free] = kind + " " + free;
+        set(free);
+      } else set(parseInt(el.value, 10) || 0);
+      touched();
+    });
+  };
+  const bindField = (id, kind, set) => {
+    const el = $(id);
+    if (!el) return;
+    if (kind === "flag" || kind === "counter") bindVarPicker(el, set, kind);
+    else el.addEventListener("change", () => { set(parseInt(el.value, 10) || 0); touched(); });
+  };
+
+  e.conds.forEach((c, i) => {
+    const cs = COND_SPEC[c.type] || {};
+    $("c-t-" + i).addEventListener("change", () => {
+      c.type = $("c-t-" + i).value;
+      c.targetID = 0; c.value = 0;
+      touched();
+    });
+    if (cs.target) bindField("c-a-" + i, cs.target, v => c.targetID = v);
+    if (cs.value) bindField("c-v-" + i, cs.value, v => c.value = v);
+    $("c-n-" + i).addEventListener("change", () => { c.negate = $("c-n-" + i).value === "1"; touched(); });
+    $("c-x-" + i).addEventListener("click", () => { e.conds.splice(i, 1); touched(); });
+  });
+  if ($("c-add"))
+    $("c-add").addEventListener("click", () => { e.conds.push(newCond()); touched(); });
+
+  e.actions.forEach((a, i) => {
+    const as = ACT_SPEC[a.type] || {};
+    $("a-t-" + i).addEventListener("change", () => {
+      a.type = $("a-t-" + i).value;
+      a.targetID = 0; a.value = 0; a.text = "";
+      touched();
+    });
+    if (as.target) bindField("a-a-" + i, as.target, v => a.targetID = v);
+    if (as.value === "exit") {
+      const repack = () => {
+        const d = parseInt($("a-d-" + i).value, 10) || 0;
+        const dest = $("a-e-" + i) ? (parseInt($("a-e-" + i).value, 10) || 0) : 0;
+        a.value = (d & 7) | (dest << 3);
+        touched();
+      };
+      $("a-d-" + i).addEventListener("change", repack);
+      if ($("a-e-" + i)) $("a-e-" + i).addEventListener("change", repack);
+    } else if (as.value) {
+      bindField("a-v-" + i, as.value === "ending" ? "num" : as.value, v => a.value = v);
+    }
+    if (as.text) {
+      const t = $("a-s-" + i);
+      counterFor($("c-a-s-" + i), t.value, LIM.EVENT_TEXT);
+      t.addEventListener("input", () => {
+        a.text = t.value.slice(0, LIM.EVENT_TEXT);
+        counterFor($("c-a-s-" + i), t.value, LIM.EVENT_TEXT);
+        renderWorldBar();
+      });
+    }
+    $("a-x-" + i).addEventListener("click", () => { e.actions.splice(i, 1); touched(); });
+  });
+  if ($("a-add"))
+    $("a-add").addEventListener("click", () => { e.actions.push(newAction()); touched(); });
+
+  $("e-delete").addEventListener("click", () => {
+    if (!confirm("Delete event " + n + "? Slot " + n + " stays empty, so existing " +
+                 "save games keep meaning what they meant.")) return;
+    delete world.events[n];
+    selEvent = null;
+    touched();
+  });
+}
+
+function addEvent() {
+  const n = nextEventSlot();
+  if (!n) { toast("All " + LIM.EVENTS + " event slots are used.", true); return; }
+  world.events[n] = newEvent("");
+  selEvent = n;
+  renderAll();
+  showTab("events");
+  setTimeout(() => { const el = $("e-name"); if (el) el.focus(); }, 0);
+}
+
 // A printable booklet: the same numbers the game cites, ready to hand to a player.
 function buildBooklet() {
   const esc = escapeHtml;
@@ -1974,6 +3225,17 @@ function paraTriggers(n) {
   for (const m of world.mobs)
     if ((m.firstTalkPara | 0) === n)
       out.push('first talk with mob ' + m.id + ' "' + (m.name || "unnamed") + '"');
+  // The seventh route to a paragraph and the only one that is not a field on
+  // an entity: an event's SHOWPARAGRAPH action. Without this every
+  // event-fired paragraph is reported as an orphan, and "fired by: NOTHING"
+  // is the one line in this report an author acts on. Mirrors
+  // DescribeTriggers in worldval.pas.
+  for (const s of eventSlots())
+    world.events[s].actions.forEach((a, i) => {
+      if (a.type === "SHOWPARAGRAPH" && (a.targetID | 0) === n)
+        out.push('event ' + s + ' "' + (world.events[s].name || "unnamed") +
+                 '", action ' + (i + 1) + " (" + world.events[s].trigger + ")");
+    });
   return out;
 }
 
@@ -1992,6 +3254,11 @@ function danglingParaRefs() {
   for (const r of world.rooms) check(r.firstVisitPara, "Room " + r.id + " first visit");
   for (const o of world.objects) check(o.firstTakePara, "Object " + o.id + " first take");
   for (const m of world.mobs) check(m.firstTalkPara, "Mob " + m.id + " first talk");
+  for (const s of eventSlots())
+    world.events[s].actions.forEach((a, i) => {
+      if (a.type === "SHOWPARAGRAPH")
+        check(a.targetID, "Event " + s + " action " + (i + 1));
+    });
   return out;
 }
 
@@ -2119,6 +3386,7 @@ $("wBooklet").addEventListener("change", e => {
 });
 
 $("addPara").addEventListener("click", addParagraph);
+$("addEvent").addEventListener("click", addEvent);
 $("exportBooklet").addEventListener("click", () => {
   if (!paraNumbers().length) return toast("There are no paragraphs to print yet.", true);
   download("booklet.html", buildBooklet(), "text/html");

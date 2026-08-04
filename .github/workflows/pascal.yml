@@ -5,11 +5,15 @@ on:
     branches: [ "main" ]
     paths:
       - 'pascal/**'
+      # webtest evaluates web/editor.html's own file layer and checks it
+      # against the Pascal one, so a change there has to run this workflow.
+      - 'web/**'
       - '.github/workflows/pascal.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'pascal/**'
+      - 'web/**'
   workflow_dispatch:
 
 jobs:
@@ -42,11 +46,13 @@ jobs:
           fpc -O2 -XX -CX -Xs -Fusrc -obin/validate tools/validate.pas
           fpc -O2 -XX -CX -Xs -Fusrc -obin/bpldump tools/bpldump.pas
 
+      # pairtest, eventtest and parsetest, then webtest - which evaluates
+      # web/editor.html's own reader and writer under Node and makes the
+      # Pascal agree with the bytes it produced. Ubuntu runners ship Node, so
+      # the skip path in that target should never be taken here.
       - name: Run unit tests
         working-directory: pascal
-        run: |
-          fpc -O2 -XX -CX -Xs -Fusrc -obin/pairtest tools/pairtest.pas
-          bin/pairtest
+        run: make test
 
       # The shipped world must stay completable: every room reachable, a win
       # condition that can actually be met, no dangling references.
