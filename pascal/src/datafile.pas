@@ -112,14 +112,15 @@ begin
 end;
 
 type
-  TSectionType = (secNone, secWorld, secRoom, secObject, secMob, secParagraph);
+  TSectionType = (secNone, secWorld, secRoom, secObject, secMob, secParagraph,
+                  secEvent);
   TFileFormat = (ffText, ffBinary, ffBPL);
 
 const
   SORB_MAGIC = 'SORB';
   SORS_MAGIC = 'SORS';      { Save games }
-  FILE_VERSION = 3;         { Versions 1 and 2 still load }
-  SAVE_VERSION = 2;         { Version 1 saves still load }
+  FILE_VERSION = 4;         { Versions 1, 2 and 3 still load }
+  SAVE_VERSION = 3;         { Versions 1 and 2 still load }
 
 type
   { The magic + version prefix is identical in every version, so it can be read
@@ -250,6 +251,55 @@ type
     FirstTalkPara: Word;    { offset 341, record is 343 bytes }
   end;
 
+  { --- Version 4 (current) ---
+
+    Version 4 is version 3 plus three trailing sections after the paragraph
+    blob: events, flag names, counter names. The room, object and mob records
+    are unchanged, so a v4 file is a v3 file with more on the end, and the two
+    versions share a reader.
+
+    Unlike every other record here, an event is written variable-length. A
+    fixed record would have to reserve room for MAX_ACTIONS actions of
+    MAX_EVENT_TEXT characters each - 764 bytes, of which a realistic event
+    uses under a hundred. Each record is preceded by its own size, so a
+    reader can skip a record it does not fully understand, and a truncated
+    one is detectable:
+
+      Word  EventCount              - records that follow
+      repeat EventCount times:
+        Word  Size                  - bytes after this field
+        Word  Number                - the slot, 1..MAX_EVENTS
+        Byte  NameLen ; Byte[NameLen] Name
+        Byte  TriggerType           - Ord of the enum
+        Word  TriggerID
+        Word  TriggerID2
+        Byte  Flags                 - bit 0 OneShot, bit 1 Enabled
+        Byte  CondCount
+        repeat CondCount times:     - 6 bytes each, only the used ones
+          Byte CondType ; Word TargetID ; SmallInt Value ; Byte Negate
+        Byte  ActionCount
+        repeat ActionCount times:   - only the used ones
+          Byte ActionType ; Word TargetID ; SmallInt Value
+          Byte TextLen ; Byte[TextLen] Text
+
+    Writing the slot number in the record is what lets events keep stable
+    numbering without paying for the gaps: a deleted event costs nothing at
+    all, where a deleted paragraph still costs its two-byte zero length.
+
+    The enum fields are written as explicit Bytes rather than as the enum
+    types from gamedata.pas. An FPC enum is four bytes by default, and its
+    width is a compiler setting - writing the enum itself would make the file
+    format depend on how the unit happened to be compiled. }
+
+const
+  EV_ONESHOT = $01;
+  EV_ENABLED = $02;
+
+type
+  { Scratch for one serialised event. Ample: the largest possible event is
+    about 780 bytes. Unit-level rather than on the stack, for DOS. }
+  TEventBuf = array[0..1023] of Byte;
+
   { --- Save game (SORS) --- }
 
   TSaveHeader = packed record
@@ -272,6 +322,15 @@ type
   TMobStateRec = packed record
     ID: Word;
     RoomID: Word;
+  end;
+
+  { Version 3 of the save. Exits are world definition everywhere else, but
+    atLockExit and atUnlockExit make them mutable, and a locked door that
+    reopens itself when the player restores would be worse than no locking at
+    all. 14 bytes per active room. }
+  TRoomStateRec = packed record
+    ID: Word;
+    Exits: array[TDirection] of Word;
   end;
 
 function FlagsToByte(F: TObjectFlags): Byte;
@@ -466,8 +525,237 @@ begin
   Result := True;
 end;
 
-{ Versions 2 and 3 differ only by one Word appended to each record plus the
-  paragraph section, so they share a reader rather than duplicating it }
+{ --- Variable-length event serialisation ---
+  Both directions walk the same buffer with a cursor, so the two stay in step
+  by construction: every Put has a Get at the same point in the sequence. }
+
+var
+  EvBuf: TEventBuf;
+
+procedure PutByte(var P: Integer; V: Byte);
+begin
+  if P < SizeOf(TEventBuf) then EvBuf[P] := V;
+  Inc(P);
+end;
+
+procedure PutWord(var P: Integer; V: Word);
+begin
+  PutByte(P, V and $FF);
+  PutByte(P, V shr 8);
+end;
+
+procedure PutStr(var P: Integer; const S: string);
+var
+  I: Integer;
+begin
+  PutByte(P, Length(S));
+  for I := 1 to Length(S) do
+    PutByte(P, Ord(S[I]));
+end;
+
+function GetByte(var P: Integer; Limit: Integer): Byte;
+begin
+  if P < Limit then Result := EvBuf[P] else Result := 0;
+  Inc(P);
+end;
+
+function GetWord(var P: Integer; Limit: Integer): Word;
+var
+  Lo: Byte;
+begin
+  Lo := GetByte(P, Limit);
+  Result := Lo or (Word(GetByte(P, Limit)) shl 8);
+end;
+
+function GetStr(var P: Integer; Limit, Max: Integer): string;
+var
+  Len, I: Integer;
+begin
+  Len := GetByte(P, Limit);
+  Result := '';
+  for I := 1 to Len do
+    if Length(Result) < Max then
+      Result := Result + Chr(GetByte(P, Limit))
+    else
+      GetByte(P, Limit);        { Over-long: consumed, but dropped }
+end;
+
+{ Serialises E into EvBuf, returning the length. The slot number goes in the
+  record, so the writer may skip empty slots without renumbering anything. }
+function EventToBuf(const E: TWorldEvent; Number: Word): Integer;
+var
+  P, I: Integer;
+  Fl: Byte;
+begin
+  P := 0;
+  PutWord(P, Number);
+  PutStr(P, E.Name);
+  PutByte(P, Ord(E.TriggerType));
+  PutWord(P, E.TriggerID);
+  PutWord(P, E.TriggerID2);
+  Fl := 0;
+  if E.OneShot then Fl := Fl or EV_ONESHOT;
+  if E.Enabled then Fl := Fl or EV_ENABLED;
+  PutByte(P, Fl);
+
+  PutByte(P, E.CondCount);
+  for I := 1 to E.CondCount do
+    with E.Conditions[I] do
+    begin
+      PutByte(P, Ord(CondType));
+      PutWord(P, TargetID);
+      PutWord(P, Word(Value));
+      PutByte(P, Ord(Negate));
+    end;
+
+  PutByte(P, E.ActionCount);
+  for I := 1 to E.ActionCount do
+    with E.Actions[I] do
+    begin
+      PutByte(P, Ord(ActionType));
+      PutWord(P, TargetID);
+      PutWord(P, Word(Value));
+      PutStr(P, Text);
+    end;
+
+  Result := P;
+end;
+
+{ The mirror. Out-of-range enum ordinals are clamped to the inert member
+  rather than cast blindly - a file written by a newer build could name an
+  action this one has never heard of, and an out-of-range enum would be
+  undefined behaviour on every later comparison. }
+function EventFromBuf(Len: Integer; var E: TWorldEvent): Word;
+var
+  P, I, N: Integer;
+  B, Fl: Byte;
+begin
+  InitEvent(E);
+  P := 0;
+  Result := GetWord(P, Len);
+  E.Name := GetStr(P, Len, MAX_EVENT_NAME);
+  B := GetByte(P, Len);
+  if B <= Ord(High(TEventTrigger)) then E.TriggerType := TEventTrigger(B);
+  E.TriggerID := GetWord(P, Len);
+  E.TriggerID2 := GetWord(P, Len);
+  Fl := GetByte(P, Len);
+  E.OneShot := (Fl and EV_ONESHOT) <> 0;
+  E.Enabled := (Fl and EV_ENABLED) <> 0;
+
+  N := GetByte(P, Len);
+  if N > MAX_CONDITIONS then N := MAX_CONDITIONS;
+  E.CondCount := N;
+  for I := 1 to N do
+    with E.Conditions[I] do
+    begin
+      B := GetByte(P, Len);
+      if B <= Ord(High(TConditionType)) then CondType := TConditionType(B);
+      TargetID := GetWord(P, Len);
+      Value := SmallInt(GetWord(P, Len));
+      Negate := GetByte(P, Len) <> 0;
+    end;
+
+  N := GetByte(P, Len);
+  if N > MAX_ACTIONS then N := MAX_ACTIONS;
+  E.ActionCount := N;
+  for I := 1 to N do
+    with E.Actions[I] do
+    begin
+      B := GetByte(P, Len);
+      if B <= Ord(High(TActionType)) then ActionType := TActionType(B);
+      TargetID := GetWord(P, Len);
+      Value := SmallInt(GetWord(P, Len));
+      Text := GetStr(P, Len, MAX_EVENT_TEXT);
+    end;
+
+  E.Active := True;
+end;
+
+{ Reads the three trailing sections version 4 adds: events, then the author's
+  flag and counter names. Like the paragraph section these are self-describing,
+  so a version 3 file - which simply ends after the paragraphs - leaves the
+  world without events rather than failing the load. }
+function ReadEvents(var F: File; var W: TGameWorld): Boolean;
+var
+  Count, I, Slot: Word;
+  Len: Byte;
+  Size, BytesRead: Integer;
+  Buf: array[0..MAX_VAR_NAME - 1] of Char;
+  S: string;
+  Ev: TWorldEvent;
+
+  function ReadNames(Limit: Word; IsFlag: Boolean): Boolean;
+  var
+    N, J: Word;
+  begin
+    Result := False;
+    {$I-}
+    BlockRead(F, N, SizeOf(Word), BytesRead);
+    {$I+}
+    if (IOResult <> 0) or (BytesRead <> SizeOf(Word)) then Exit;
+    if N > Limit then N := Limit;
+    for J := 1 to N do
+    begin
+      {$I-}
+      BlockRead(F, Len, SizeOf(Byte), BytesRead);
+      {$I+}
+      if (IOResult <> 0) or (BytesRead <> SizeOf(Byte)) then Exit;
+      if Len = 0 then Continue;
+      if Len > MAX_VAR_NAME then Exit;
+      {$I-}
+      BlockRead(F, Buf, Len, BytesRead);
+      {$I+}
+      if (IOResult <> 0) or (BytesRead <> Len) then Exit;
+      SetLength(S, Len);
+      Move(Buf, S[1], Len);
+      if IsFlag then W.FlagNames[J] := S else W.CounterNames[J] := S;
+    end;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+
+  {$I-}
+  BlockRead(F, Count, SizeOf(Word), BytesRead);
+  {$I+}
+  if (IOResult <> 0) or (BytesRead <> SizeOf(Word)) then Exit;
+  if Count > MAX_EVENTS then Exit;
+
+  W.EventCount := 0;
+  for I := 1 to Count do
+  begin
+    {$I-}
+    BlockRead(F, Size, SizeOf(Word), BytesRead);
+    {$I+}
+    if (IOResult <> 0) or (BytesRead <> SizeOf(Word)) then Exit;
+    Size := Size and $FFFF;
+    if (Size < 2) or (Size > SizeOf(TEventBuf)) then Exit;
+
+    {$I-}
+    BlockRead(F, EvBuf, Size, BytesRead);
+    {$I+}
+    if (IOResult <> 0) or (BytesRead <> Size) then Exit;
+
+    { Any tail this build does not understand is simply not read - the cursor
+      stops where the fields it knows run out, and Size has already told the
+      loop where the next record begins. }
+    Slot := EventFromBuf(Size, Ev);
+    if (Slot >= 1) and (Slot <= MAX_EVENTS) then
+    begin
+      W.Events[Slot] := Ev;
+      if Slot > W.EventCount then W.EventCount := Slot;
+    end;
+  end;
+
+  if not ReadNames(MAX_FLAGS, True) then Exit;
+  if not ReadNames(MAX_COUNTERS, False) then Exit;
+
+  Result := True;
+end;
+
+{ Versions 2, 3 and 4 differ only by one Word appended to each record plus the
+  trailing sections, so they share a reader rather than duplicating it }
 function ReadBinaryV2Or3(var F: File; var W: TGameWorld; Version: Word): Boolean;
 var
   Header: TGameHeaderV2;
@@ -593,6 +881,8 @@ begin
 
   if Version >= 3 then
     ReadParagraphs(F, W);
+  if Version >= 4 then
+    ReadEvents(F, W);
 
   Result := True;
 end;
@@ -626,8 +916,8 @@ begin
   end;
 
   case Prefix.Version of
-    1:    Ok := ReadBinaryV1(F, W, FileName);
-    2, 3: Ok := ReadBinaryV2Or3(F, W, Prefix.Version);
+    1:       Ok := ReadBinaryV1(F, W, FileName);
+    2, 3, 4: Ok := ReadBinaryV2Or3(F, W, Prefix.Version);
   else
     Ok := False;   { A newer format than this build understands }
   end;
@@ -640,6 +930,89 @@ begin
     W.MaxScore := ComputeMaxScore(W);
 
   Result := W.RoomCount > 0;
+end;
+
+{ The mirror of ReadEvents. Flag and counter names are written up to the
+  highest one the author named, empty slots included as a zero length, so the
+  numbering an author sees in the editor does not shift when they clear one. }
+function WriteEvents(var F: File; var W: TGameWorld): Boolean;
+var
+  Count, I, Hi: Word;
+  Len: Byte;
+  Size, BytesWritten: Integer;
+  S: string;
+
+  function WriteNames(Limit: Word; IsFlag: Boolean): Boolean;
+  var
+    N, J: Word;
+  begin
+    Result := False;
+    N := 0;
+    for J := Limit downto 1 do
+      if ((IsFlag) and (W.FlagNames[J] <> '')) or
+         ((not IsFlag) and (W.CounterNames[J] <> '')) then
+      begin
+        N := J;
+        Break;
+      end;
+    {$I-}
+    BlockWrite(F, N, SizeOf(Word), BytesWritten);
+    {$I+}
+    if (IOResult <> 0) or (BytesWritten <> SizeOf(Word)) then Exit;
+    for J := 1 to N do
+    begin
+      if IsFlag then S := W.FlagNames[J] else S := W.CounterNames[J];
+      if Length(S) > MAX_VAR_NAME then S := Copy(S, 1, MAX_VAR_NAME);
+      Len := Length(S);
+      {$I-}
+      BlockWrite(F, Len, SizeOf(Byte), BytesWritten);
+      {$I+}
+      if (IOResult <> 0) or (BytesWritten <> SizeOf(Byte)) then Exit;
+      if Len > 0 then
+      begin
+        {$I-}
+        BlockWrite(F, S[1], Len, BytesWritten);
+        {$I+}
+        if (IOResult <> 0) or (BytesWritten <> Integer(Len)) then Exit;
+      end;
+    end;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+
+  Hi := W.EventCount;
+  if Hi > MAX_EVENTS then Hi := MAX_EVENTS;
+  Count := 0;
+  for I := 1 to Hi do
+    if W.Events[I].Active then Inc(Count);
+
+  {$I-}
+  BlockWrite(F, Count, SizeOf(Word), BytesWritten);
+  {$I+}
+  if (IOResult <> 0) or (BytesWritten <> SizeOf(Word)) then Exit;
+
+  { Empty slots are skipped rather than written as a hole: each record carries
+    its own slot number, so a gap costs nothing at all. }
+  for I := 1 to Hi do
+    if W.Events[I].Active then
+    begin
+      Size := EventToBuf(W.Events[I], I);
+      {$I-}
+      BlockWrite(F, Size, SizeOf(Word), BytesWritten);
+      {$I+}
+      if (IOResult <> 0) or (BytesWritten <> SizeOf(Word)) then Exit;
+      {$I-}
+      BlockWrite(F, EvBuf, Size, BytesWritten);
+      {$I+}
+      if (IOResult <> 0) or (BytesWritten <> Size) then Exit;
+    end;
+
+  if not WriteNames(MAX_FLAGS, True) then Exit;
+  if not WriteNames(MAX_COUNTERS, False) then Exit;
+
+  Result := True;
 end;
 
 function SaveWorldBinary(const FileName: string; var W: TGameWorld): Boolean;
@@ -823,6 +1196,15 @@ begin
     end;
   end;
 
+  { Event section. Unlike paragraphs, event numbers are never printed in a
+    booklet, so there is nothing to keep in place: only active events are
+    written, compacted, and identified by their own ID. }
+  if not WriteEvents(F, W) then
+  begin
+    Close(F);
+    Exit;
+  end;
+
   Close(F);
   Result := True;
 end;
@@ -839,7 +1221,62 @@ begin
   U := UpperCase(Line);
   Result := (Pos('[WORLD]', U) = 1) or (Pos('[ROOM:', U) = 1) or
             (Pos('[OBJECT:', U) = 1) or (Pos('[MOB:', U) = 1) or
-            (Pos('[PARAGRAPH:', U) = 1);
+            (Pos('[PARAGRAPH:', U) = 1) or (Pos('[EVENT:', U) = 1);
+end;
+
+{ Splits off the text up to the next comma, advancing S past it. The event
+  encodings below are comma-separated lists whose last field may itself
+  contain commas, so the caller stops splitting and takes the rest verbatim. }
+function NextField(var S: string): string;
+var
+  P: Integer;
+begin
+  P := Pos(',', S);
+  if P = 0 then
+  begin
+    Result := S;
+    S := '';
+  end
+  else
+  begin
+    Result := Copy(S, 1, P - 1);
+    S := Copy(S, P + 1, Length(S));
+  end;
+end;
+
+{ COND=<type>,<targetid>,<value>,<negate> }
+procedure ParseCondition(const Value: string; var C: TCondition);
+var
+  Rest: string;
+begin
+  Rest := Value;
+  C.CondType := ConditionFromName(Trim(NextField(Rest)));
+  C.TargetID := StrToIntDef(Trim(NextField(Rest)), 0);
+  C.Value := StrToIntDef(Trim(NextField(Rest)), 0);
+  C.Negate := StrToIntDef(Trim(NextField(Rest)), 0) <> 0;
+end;
+
+{ ACTION=<type>,<targetid>,<value>[,<text>] - the text is whatever follows the
+  third comma, verbatim, so a message may contain commas of its own. }
+procedure ParseAction(const Value: string; var A: TAction);
+var
+  Rest: string;
+begin
+  Rest := Value;
+  A.ActionType := ActionFromName(Trim(NextField(Rest)));
+  A.TargetID := StrToIntDef(Trim(NextField(Rest)), 0);
+  A.Value := StrToIntDef(Trim(NextField(Rest)), 0);
+  A.Text := Copy(Rest, 1, MAX_EVENT_TEXT);
+end;
+
+{ FLAG=<number>,<name> and COUNTER=<number>,<name> in [WORLD] }
+procedure ParseVarName(const Value: string; var Num: Integer; var Nm: string);
+var
+  Rest: string;
+begin
+  Rest := Value;
+  Num := StrToIntDef(Trim(NextField(Rest)), 0);
+  Nm := Copy(Trim(Rest), 1, MAX_VAR_NAME);
 end;
 
 function LoadWorldText(const FileName: string; var W: TGameWorld): Boolean;
@@ -850,6 +1287,8 @@ var
   Section: TSectionType;
   ParaIdx: Integer;
   ParaBuf: TParaText;
+  VarNum: Integer;
+  VarName: string;
 
   { Paragraphs accumulate across many lines, so they are committed when the
     next section starts or the file ends }
@@ -961,6 +1400,22 @@ begin
           W.Mobs[CurrentIdx].ID := StrToIntDef(Value, CurrentIdx);
         end;
       end
+      else if Pos('[EVENT:', UpperCase(Line)) = 1 then
+      begin
+        Section := secEvent;
+        { The number in the header is the slot, not a running index - the save
+          game's Fired bitmap is indexed by it, so it must not shift }
+        Value := Copy(Line, 8, Pos(']', Line) - 8);
+        CurrentIdx := StrToIntDef(Value, 0);
+        if (CurrentIdx < 1) or (CurrentIdx > MAX_EVENTS) then
+          CurrentIdx := 0
+        else
+        begin
+          InitEvent(W.Events[CurrentIdx]);
+          W.Events[CurrentIdx].Active := True;
+          if CurrentIdx > W.EventCount then W.EventCount := CurrentIdx;
+        end;
+      end
       else if Pos('[PARAGRAPH:', UpperCase(Line)) = 1 then
       begin
         Section := secParagraph;
@@ -1002,6 +1457,18 @@ begin
                 W.WorldFlags := W.WorldFlags or WF_BOOKLET
               else
                 W.WorldFlags := W.WorldFlags and not WF_BOOKLET;
+            end
+            else if Key = 'FLAG' then
+            begin
+              ParseVarName(Value, VarNum, VarName);
+              if (VarNum >= 1) and (VarNum <= MAX_FLAGS) then
+                W.FlagNames[VarNum] := VarName;
+            end
+            else if Key = 'COUNTER' then
+            begin
+              ParseVarName(Value, VarNum, VarName);
+              if (VarNum >= 1) and (VarNum <= MAX_COUNTERS) then
+                W.CounterNames[VarNum] := VarName;
             end;
           end;
         secRoom:
@@ -1062,6 +1529,41 @@ begin
             else if Key = 'FIRSTTALK' then
               W.Mobs[CurrentIdx].FirstTalkPara := StrToIntDef(Value, 0);
           end;
+        secEvent:
+          if (CurrentIdx > 0) and (CurrentIdx <= MAX_EVENTS) then
+          begin
+            if Key = 'NAME' then
+              W.Events[CurrentIdx].Name := Value
+            else if Key = 'TRIGGER' then
+              W.Events[CurrentIdx].TriggerType := TriggerFromName(Value)
+            else if Key = 'TRIGGERID' then
+              W.Events[CurrentIdx].TriggerID := StrToIntDef(Value, 0)
+            else if Key = 'TRIGGERID2' then
+              W.Events[CurrentIdx].TriggerID2 := StrToIntDef(Value, 0)
+            else if Key = 'ONESHOT' then
+              W.Events[CurrentIdx].OneShot := StrToIntDef(Value, 1) <> 0
+            else if Key = 'ENABLED' then
+              W.Events[CurrentIdx].Enabled := StrToIntDef(Value, 1) <> 0
+            { COND and ACTION repeat, in order, and surplus ones are dropped }
+            else if Key = 'COND' then
+            begin
+              if W.Events[CurrentIdx].CondCount < MAX_CONDITIONS then
+              begin
+                Inc(W.Events[CurrentIdx].CondCount);
+                ParseCondition(Value,
+                  W.Events[CurrentIdx].Conditions[W.Events[CurrentIdx].CondCount]);
+              end;
+            end
+            else if Key = 'ACTION' then
+            begin
+              if W.Events[CurrentIdx].ActionCount < MAX_ACTIONS then
+              begin
+                Inc(W.Events[CurrentIdx].ActionCount);
+                ParseAction(Value,
+                  W.Events[CurrentIdx].Actions[W.Events[CurrentIdx].ActionCount]);
+              end;
+            end;
+          end;
       end;
     end;
   end;
@@ -1083,6 +1585,10 @@ begin
   else
     Result := LoadWorldText(FileName, W);
   end;
+  { All three formats can carry an event authored to start disabled, so the
+    live bitmap is seeded here rather than in each loader }
+  if Result then
+    SeedEventState(W);
 end;
 
 procedure WriteParaBody(var F: Text; const S: TParaText);
@@ -1108,7 +1614,7 @@ end;
 function SaveWorldText(const FileName: string; var W: TGameWorld): Boolean;
 var
   F: Text;
-  I: Integer;
+  I, J: Integer;
   FlagStr: string;
 begin
   Result := False;
@@ -1135,6 +1641,15 @@ begin
     WriteLn(F, 'BOOKLET=1')
   else
     WriteLn(F, 'BOOKLET=0');
+  { Only the flags and counters the author actually named. The engine indexes
+    them by number regardless; these lines are here so a hand-edited world
+    stays readable. }
+  for I := 1 to MAX_FLAGS do
+    if W.FlagNames[I] <> '' then
+      WriteLn(F, 'FLAG=', I, ',', W.FlagNames[I]);
+  for I := 1 to MAX_COUNTERS do
+    if W.CounterNames[I] <> '' then
+      WriteLn(F, 'COUNTER=', I, ',', W.CounterNames[I]);
   WriteLn(F);
 
   { Write rooms }
@@ -1191,6 +1706,37 @@ begin
     end;
   end;
 
+  { Write events. COND and ACTION repeat in order; the reader appends them as
+    it meets them, so the order here is the order they run in. }
+  for I := 1 to MAX_EVENTS do
+  begin
+    if W.Events[I].Active then
+    begin
+      WriteLn(F, '[EVENT:', I, ']');
+      WriteLn(F, 'NAME=', W.Events[I].Name);
+      WriteLn(F, 'TRIGGER=', TriggerName(W.Events[I].TriggerType));
+      WriteLn(F, 'TRIGGERID=', W.Events[I].TriggerID);
+      WriteLn(F, 'TRIGGERID2=', W.Events[I].TriggerID2);
+      if W.Events[I].OneShot then
+        WriteLn(F, 'ONESHOT=1')
+      else
+        WriteLn(F, 'ONESHOT=0');
+      if W.Events[I].Enabled then
+        WriteLn(F, 'ENABLED=1')
+      else
+        WriteLn(F, 'ENABLED=0');
+      for J := 1 to W.Events[I].CondCount do
+        with W.Events[I].Conditions[J] do
+          WriteLn(F, 'COND=', ConditionName(CondType), ',', TargetID, ',',
+                  Value, ',', Ord(Negate));
+      for J := 1 to W.Events[I].ActionCount do
+        with W.Events[I].Actions[J] do
+          WriteLn(F, 'ACTION=', ActionName(ActionType), ',', TargetID, ',',
+                  Value, ',', Text);
+      WriteLn(F);
+    end;
+  end;
+
   { Write paragraphs. The body is literal text rather than key=value, so it
     can span lines and keep its blank-line breaks. }
   for I := 1 to W.ParaCount do
@@ -1237,6 +1783,10 @@ begin
             (LongWord(W.MobCount) shl 16);
   for I := 1 to Length(W.Title) do
     Result := ((Result shl 5) or (Result shr 27)) xor LongWord(Ord(W.Title[I]));
+  { Events deliberately do not enter into this. An event's slot number is its
+    identity and slots are never renumbered, so the Fired and EvEnabled
+    bitmaps stay meaningful when an author adds or deletes one - and every
+    save written before events existed still matches its world. }
 end;
 
 function SaveGameState(const FileName: string; var W: TGameWorld): Boolean;
@@ -1245,9 +1795,13 @@ var
   Header: TSaveHeader;
   ObjState: TObjectStateRec;
   MobState: TMobStateRec;
+  RoomState: TRoomStateRec;
   Visited: array[0..(MAX_ROOMS div 8) - 1] of Byte;
   Taken: array[0..(MAX_OBJECTS div 8) - 1] of Byte;
   Talked: array[0..(MAX_MOBS div 8) - 1] of Byte;
+  Flags: array[0..(MAX_FLAGS div 8) - 1] of Byte;
+  Fired: array[0..(MAX_EVENTS div 8) - 1] of Byte;
+  EvEnabled: array[0..(MAX_EVENTS div 8) - 1] of Byte;
   I, BytesWritten: Integer;
 begin
   Result := False;
@@ -1343,6 +1897,54 @@ begin
     Exit;
   end;
 
+  { Version 3: event state. Without this a restored game would forget every
+    flag it had set and replay every one-shot event it had already fired.
+    Counters are written as they stand - they are signed and small, and
+    packing them to bits would gain 64 bytes for a lot of fiddling. }
+  FillChar(Flags, SizeOf(Flags), 0);
+  for I := 1 to MAX_FLAGS do
+    if W.Flags[I] then
+      Flags[(I - 1) div 8] := Flags[(I - 1) div 8] or (1 shl ((I - 1) mod 8));
+
+  FillChar(Fired, SizeOf(Fired), 0);
+  for I := 1 to MAX_EVENTS do
+    if W.Fired[I] then
+      Fired[(I - 1) div 8] := Fired[(I - 1) div 8] or (1 shl ((I - 1) mod 8));
+
+  FillChar(EvEnabled, SizeOf(EvEnabled), 0);
+  for I := 1 to MAX_EVENTS do
+    if W.EvEnabled[I] then
+      EvEnabled[(I - 1) div 8] := EvEnabled[(I - 1) div 8] or
+                                  (1 shl ((I - 1) mod 8));
+
+  {$I-}
+  BlockWrite(F, Flags, SizeOf(Flags), BytesWritten);
+  BlockWrite(F, W.Counters, SizeOf(TCounterArray), BytesWritten);
+  BlockWrite(F, Fired, SizeOf(Fired), BytesWritten);
+  BlockWrite(F, EvEnabled, SizeOf(EvEnabled), BytesWritten);
+  {$I+}
+  if IOResult <> 0 then
+  begin
+    Close(F);
+    Exit;
+  end;
+
+  { Room exits, which events can lock and unlock }
+  for I := 1 to MAX_ROOMS do
+    if W.Rooms[I].Active then
+    begin
+      RoomState.ID := W.Rooms[I].ID;
+      RoomState.Exits := W.Rooms[I].Exits;
+      {$I-}
+      BlockWrite(F, RoomState, SizeOf(TRoomStateRec), BytesWritten);
+      {$I+}
+      if IOResult <> 0 then
+      begin
+        Close(F);
+        Exit;
+      end;
+    end;
+
   Close(F);
   Result := True;
 end;
@@ -1356,9 +1958,14 @@ var
   Visited: array[0..(MAX_ROOMS div 8) - 1] of Byte;
   Taken: array[0..(MAX_OBJECTS div 8) - 1] of Byte;
   Talked: array[0..(MAX_MOBS div 8) - 1] of Byte;
+  Flags: array[0..(MAX_FLAGS div 8) - 1] of Byte;
+  Fired: array[0..(MAX_EVENTS div 8) - 1] of Byte;
+  EvEnabled: array[0..(MAX_EVENTS div 8) - 1] of Byte;
+  Counters: TCounterArray;
+  RoomState: TRoomStateRec;
   Inv: TInventory;
-  I, Idx, BytesRead: Integer;
-  ActiveObjs, ActiveMobs: Integer;
+  I, Idx, BytesRead, BytesRead2: Integer;
+  ActiveObjs, ActiveMobs, ActiveRooms: Integer;
   Expected: LongInt;
 begin
   Result := False;
@@ -1398,6 +2005,14 @@ begin
   { Version 1 predates the Talked bitmap and is simply that much shorter }
   if Header.Version >= 2 then
     Expected := Expected + SizeOf(Talked);
+  { Version 3 appends the event state and the room exits on the same principle }
+  ActiveRooms := 0;
+  for I := 1 to MAX_ROOMS do
+    if W.Rooms[I].Active then Inc(ActiveRooms);
+  if Header.Version >= 3 then
+    Expected := Expected + SizeOf(Flags) + SizeOf(TCounterArray) +
+                SizeOf(Fired) + SizeOf(EvEnabled) +
+                ActiveRooms * SizeOf(TRoomStateRec);
   if FileSize(F) <> Expected then
   begin
     Close(F);
@@ -1479,12 +2094,78 @@ begin
     end;
   end;
 
+  { Version 3 event state. A version 1 or 2 save predates it, so the world
+    keeps the cleared state InitWorld gave it - every flag false, every
+    counter zero, nothing fired, everything enabled. }
+  FillChar(Flags, SizeOf(Flags), 0);
+  FillChar(Fired, SizeOf(Fired), 0);
+  FillChar(EvEnabled, SizeOf(EvEnabled), $FF);   { Enabled by default }
+  FillChar(Counters, SizeOf(Counters), 0);
+  if Header.Version >= 3 then
+  begin
+    {$I-}
+    BlockRead(F, Flags, SizeOf(Flags), BytesRead);
+    if BytesRead = SizeOf(Flags) then
+      BlockRead(F, Counters, SizeOf(TCounterArray), BytesRead2);
+    if BytesRead2 = SizeOf(TCounterArray) then
+      BlockRead(F, Fired, SizeOf(Fired), BytesRead);
+    if BytesRead = SizeOf(Fired) then
+      BlockRead(F, EvEnabled, SizeOf(EvEnabled), BytesRead);
+    {$I+}
+    if (IOResult <> 0) or (BytesRead <> SizeOf(EvEnabled)) or
+       (BytesRead2 <> SizeOf(TCounterArray)) then
+    begin
+      Close(F);
+      Exit;
+    end;
+
+    for I := 1 to MAX_ROOMS do
+      if W.Rooms[I].Active then
+      begin
+        {$I-}
+        BlockRead(F, RoomState, SizeOf(TRoomStateRec), BytesRead);
+        {$I+}
+        if (IOResult <> 0) or (BytesRead <> SizeOf(TRoomStateRec)) then
+        begin
+          Close(F);
+          Exit;
+        end;
+        Idx := FindRoomByID(W, RoomState.ID);
+        if Idx > 0 then
+          W.Rooms[Idx].Exits := RoomState.Exits;
+      end;
+  end;
+
   for I := 1 to MAX_ROOMS do
     W.Visited[I] := (Visited[(I - 1) div 8] and (1 shl ((I - 1) mod 8))) <> 0;
   for I := 1 to MAX_OBJECTS do
     W.Taken[I] := (Taken[(I - 1) div 8] and (1 shl ((I - 1) mod 8))) <> 0;
   for I := 1 to MAX_MOBS do
     W.Talked[I] := (Talked[(I - 1) div 8] and (1 shl ((I - 1) mod 8))) <> 0;
+  if Header.Version >= 3 then
+  begin
+    for I := 1 to MAX_FLAGS do
+      W.Flags[I] := (Flags[(I - 1) div 8] and (1 shl ((I - 1) mod 8))) <> 0;
+    for I := 1 to MAX_EVENTS do
+    begin
+      W.Fired[I] := (Fired[(I - 1) div 8] and (1 shl ((I - 1) mod 8))) <> 0;
+      W.EvEnabled[I] :=
+        (EvEnabled[(I - 1) div 8] and (1 shl ((I - 1) mod 8))) <> 0;
+    end;
+    W.Counters := Counters;
+  end
+  else
+  begin
+    { A version 1 or 2 save predates events entirely. Reset rather than leave
+      alone: the world in memory may already have been played, so its flags
+      and counters hold that run's state, not this save's. Enabled comes from
+      what the author wrote, not from a blanket True. }
+    for I := 1 to MAX_FLAGS do
+      W.Flags[I] := False;
+    for I := 1 to MAX_COUNTERS do
+      W.Counters[I] := 0;
+    SeedEventState(W);
+  end;
 
   W.PlayerInventory := Inv;
   W.PlayerInvCount := Header.InvCount;

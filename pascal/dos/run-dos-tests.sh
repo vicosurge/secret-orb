@@ -33,10 +33,11 @@ KEEP=0
 
 need qemu-system-i386 mtools mformat mpartition mcopy mdir mkfs.msdos curl unzip
 
-for exe in SECORB.EXE EDITOR.EXE VALIDATE.EXE CONVERT.EXE PAIRTEST.EXE WORLD.DAT; do
+for exe in SECORB.EXE EDITOR.EXE VALIDATE.EXE CONVERT.EXE PAIRTEST.EXE \
+           EVENTTST.EXE WORLD.DAT; do
   [ -f "$DOSBIN/$exe" ] || die "$DOSBIN/$exe is missing - run 'make dos32' first"
 done
-for tool in converter pairtest; do
+for tool in converter pairtest eventtest; do
   [ -x "$NATIVE/$tool" ] || die "$NATIVE/$tool is missing - run 'make tools test' first"
 done
 

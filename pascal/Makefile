@@ -58,10 +58,13 @@ tools: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/validate tools/validate.pas
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/bpldump tools/bpldump.pas
 
-# Unit tests
+# Unit tests. Both write their scratch files into the working directory and
+# delete them again, so they need no fixtures.
 test: $(BINDIR)
 	$(FPC) $(FPCFLAGS) -o$(BINDIR)/pairtest tools/pairtest.pas
 	$(BINDIR)/pairtest
+	$(FPC) $(FPCFLAGS) -o$(BINDIR)/eventtest tools/eventtest.pas
+	$(BINDIR)/eventtest
 
 # Turbo Vision editor (for game creators, not part of player distribution)
 editor-tv: $(BINDIR)
@@ -92,6 +95,7 @@ dos32: dos-toolchain
 	$(DOSFPC) $(DOS32_FLAGS) -o$(DOSDIR)/VALIDATE.EXE tools/validate.pas
 	$(DOSFPC) $(DOS32_FLAGS) -o$(DOSDIR)/CONVERT.EXE  tools/converter.pas
 	$(DOSFPC) $(DOS32_FLAGS) -o$(DOSDIR)/PAIRTEST.EXE tools/pairtest.pas
+	$(DOSFPC) $(DOS32_FLAGS) -o$(DOSDIR)/EVENTTST.EXE tools/eventtest.pas
 	cp $(DATADIR)/world.dat $(DOSDIR)/WORLD.DAT
 	cp $(CWSDPMI)/CWSDPMI.EXE $(DOSDIR)/
 	@echo "DOS binaries in $(DOSDIR)/"
