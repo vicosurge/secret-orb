@@ -97,6 +97,16 @@ GitHub Actions builds for Linux, Windows, and DOS on every push to main. See
 tests must pass under DOS, the shipped world must validate, and the DOS converter
 must produce byte-identical world files to the Linux one.
 
+`.gitattributes` pins the line endings that matter. World files (`*.dat`,
+`*.bpl`) are marked `-text`, because they are supposed to be byte-reproducible
+and checksummable and cannot be if the bytes depend on who checked them out —
+the demo world is in the text format despite its `.dat` name, so before this
+the Windows package shipped a `world.dat` 73 bytes larger than the Linux and
+DOS ones, one byte per line. Nothing broke, because the loader trims line ends,
+which is precisely why it went unnoticed until the published packages were
+compared. The Windows job now asserts the file arrives with no carriage
+returns.
+
 ### Cutting a release
 
 ```bash

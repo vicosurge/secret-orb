@@ -115,6 +115,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # This is the only runner where Git converts line endings on checkout,
+      # and the demo world is in the text format despite its .dat name. Before
+      # .gitattributes pinned it, the Windows package shipped a world.dat 73
+      # bytes larger than the other two - one byte per line. Nothing broke,
+      # because the loader trims line ends, which is exactly why it went
+      # unnoticed until someone compared the published packages.
+      - name: Check the demo world survived checkout unconverted
+        working-directory: pascal
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("data/world.dat")
+          $cr = ($bytes | Where-Object { $_ -eq 13 }).Count
+          Write-Host "data/world.dat: $($bytes.Length) bytes, $cr carriage returns"
+          if ($cr -ne 0) {
+            Write-Host "::error::world.dat was line-ending converted on checkout."
+            Write-Host "The *.dat rule in .gitattributes is what prevents this."
+            exit 1
+          }
+
       - name: Install Free Pascal
         shell: pwsh
         run: |

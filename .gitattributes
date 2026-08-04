@@ -1,0 +1,24 @@
+# Git converts line endings on checkout according to each user's core.autocrlf,
+# which makes the bytes in a working tree a property of the machine rather than
+# of the repository. This project cares about exact bytes in three places, so
+# they are pinned here.
+
+# World files. The demo world is in the text format despite its .dat name, so
+# a Windows checkout was converting it: the v0.1.0 Windows package shipped a
+# world.dat 73 bytes larger than the Linux and DOS ones, one byte per line.
+# Nothing broke - the loader trims line ends - but world files are supposed to
+# be byte-reproducible and checksummable, and they cannot be if the bytes
+# depend on who checked them out.
+*.dat -text
+*.bpl -text
+
+# Shell scripts run on Linux and under CI. A CR at the end of a shebang line
+# is a syntax error that reports itself as "no such file or directory", which
+# is among the least helpful messages in computing.
+*.sh text eol=lf
+
+# BUILD.BAT is read by COMMAND.COM on DOS, which wants CRLF. Note that the
+# DOS distribution's text files do not need a rule: the Makefile strips any
+# CR before adding one, so they come out right whatever is on disk.
+*.bat text eol=crlf
+*.BAT text eol=crlf
