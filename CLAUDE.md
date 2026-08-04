@@ -63,11 +63,16 @@ things about that build are load-bearing and easy to trip over:
 
 `make dos32` builds **`secorb.pas`**, not `secretorb.pas` — the 8.3-named duplicate
 is what ships on DOS, which is the other reason the two files must stay identical.
-It also builds `VALIDATE.EXE`, `CONVERT.EXE` and `PAIRTEST.EXE`, which are not part
-of the distribution: they are what `make dos-test` runs inside FreeDOS. Those three
-are plain `WriteLn` programs, so DOS output redirection captures them; the game and
-the editor use `Crt`, which writes to video memory and reads the BIOS keyboard, and
-cannot be driven through a pipe at all.
+It also builds `VALIDATE.EXE`, `CONVERT.EXE`, `PAIRTEST.EXE` and `EVENTTST.EXE`,
+which are not part of the distribution: they are what `make dos-test` runs inside
+FreeDOS, comparing each one's output against the native run. Those four are plain
+`WriteLn` programs, so DOS output redirection captures them; the game and the
+editor use `Crt`, which writes to video memory and reads the BIOS keyboard, and
+cannot be driven through a pipe at all. `EVENTTST.EXE` is the only way any of the
+*engine* is exercised under DOS — `events.pas` uses `GameData` and nothing else,
+which is what makes it drivable from a console program. Its scratch files carry
+8.3 names for the same reason: the volume it runs on is FAT, and the kernel need
+not support long ones.
 
 `make dos-dist` builds a real 720KB FAT12 floppy image alongside the zip. That is
 the size constraint as a build step rather than a warning: if the distribution

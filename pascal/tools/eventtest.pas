@@ -6,7 +6,11 @@
 
   Covers the parts of the event system with no other regression cover: the
   binary v4 round-trip, save v3 round-trip, and backward compatibility with
-  worlds and saves written before events existed. }
+  worlds and saves written before events existed.
+
+  Its scratch files are 8.3 names on purpose. They are written into the
+  working directory and deleted again, and the working directory under the
+  DOS test run is a FAT volume whose kernel need not support long names. }
 program EventTest;
 
 {$MODE OBJFPC}
@@ -131,7 +135,7 @@ var
   Path: string;
 begin
   Heading('Binary v4 carries events, flag names and counter names');
-  Path := 'eventtest-w.dat';
+  Path := 'EVW.DAT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -185,8 +189,8 @@ var
   NA, NB: Integer;
 begin
   Heading('Saving the same world twice yields identical bytes');
-  A := 'eventtest-a.dat';
-  B := 'eventtest-b.dat';
+  A := 'EVA.DAT';
+  B := 'EVB.DAT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -211,8 +215,8 @@ var
   SizeBare, SizeEvt: LongInt;
 begin
   Heading('A world with no events costs only the three section counts');
-  Bare := 'eventtest-bare.dat';
-  Evt := 'eventtest-evt.dat';
+  Bare := 'EVBARE.DAT';
+  Evt := 'EVEVT.DAT';
 
   BuildWorld(W);
   SaveWorld(Bare, W);
@@ -245,7 +249,7 @@ var
 begin
   Heading('Save v3 carries flags, counters and fired events');
   Path := 'eventtest.sav';
-  WPath := 'eventtest-s.dat';
+  WPath := 'EVS.DAT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -291,7 +295,7 @@ var
   Path: string;
 begin
   Heading('Text format carries events');
-  Path := 'eventtest.txt';
+  Path := 'EV.TXT';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -339,7 +343,7 @@ var
   Path: string;
 begin
   Heading('BPL revision 4 carries events');
-  Path := 'eventtest.bpl';
+  Path := 'EV.BPL';
 
   BuildWorld(W);
   AddFullEvent(W);
@@ -384,7 +388,7 @@ var
   Path: string;
 begin
   Heading('A world with no events loads with clean event state');
-  Path := 'eventtest-old.dat';
+  Path := 'EVOLD.DAT';
 
   BuildWorld(W);
   SaveWorld(Path, W);
@@ -919,7 +923,7 @@ var
 begin
   Heading('The paragraph cross-reference names event actions');
 
-  Path := 'eventtest-x.txt';
+  Path := 'EVX.TXT';
   BuildEventWorld(W);
   SetParagraph(W, 3, 'The floor gives way beneath you.');
   W.ParaCount := 3;
