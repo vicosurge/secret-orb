@@ -40,7 +40,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Tags, so the guard below can resolve one to a commit
           fetch-depth: 0
@@ -77,19 +77,19 @@ jobs:
       # holds the same file names, and merging the two would have one
       # silently overwrite the other.
       - name: Download the Linux build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: secretorb-linux-x64
           path: dist
 
       - name: Download the Windows build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: secretorb-win32
           path: dist
 
       - name: Download the DOS build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: secretorb-dos32
           path: dist

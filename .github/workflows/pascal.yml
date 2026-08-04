@@ -26,7 +26,7 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Free Pascal
         run: |
@@ -102,7 +102,7 @@ jobs:
           fi
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: secretorb-linux-x64
           path: pascal/secretorb-linux-x64.tar.gz
@@ -113,7 +113,7 @@ jobs:
       FPC_VERSION: "3.2.2"
       FPC_DIR: "C:\\fpc"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # This is the only runner where Git converts line endings on checkout,
       # and the demo world is in the text format despite its .dat name. Before
@@ -259,7 +259,7 @@ jobs:
           }
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: secretorb-win32
           path: pascal/secretorb-win32.zip
@@ -267,7 +267,7 @@ jobs:
   build-dos32:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # fpc is the host compiler the cross-compiler is built with, and also
       # builds the native tools the DOS run is compared against. qemu, mtools
@@ -284,7 +284,7 @@ jobs:
       # download. Restoring only ~/.cache/secretorb-dos, not the source
       # tarballs under dl/, which the pruning step below drops.
       - name: Cache the go32v2 toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/secretorb-dos
           key: dos-toolchain-${{ runner.os }}-${{ hashFiles('pascal/dos/versions.sh', 'pascal/dos/bootstrap-toolchain.sh') }}
@@ -328,7 +328,7 @@ jobs:
         run: rm -f ~/.cache/secretorb-dos/dl/fpcbuild-*.tar.gz ~/.cache/secretorb-dos/dl/djgpp-*.tar.bz2
 
       - name: Upload DOS artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: secretorb-dos32
           path: |
@@ -345,7 +345,7 @@ jobs:
     if: always() && needs.build-linux.result == 'success'
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
@@ -353,7 +353,7 @@ jobs:
         run: ls -lh
 
       - name: Upload combined bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: secretorb-all-platforms
           path: |
