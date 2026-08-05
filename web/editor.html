@@ -2613,10 +2613,31 @@ function paraUsers(n) {
   return out;
 }
 
+// The list shows the saved paragraphs plus, if there is one, the empty draft
+// "+ Add" just created. paraNumbers() stays the persistence truth: an empty
+// slot is not a paragraph, the rule SetParagraph follows in gamedata.pas.
+function paraListNumbers() {
+  const nums = paraNumbers();
+  if (selPara && world.paragraphs[selPara] !== undefined && !nums.includes(selPara)) {
+    nums.push(selPara);
+    nums.sort((a, b) => a - b);
+  }
+  return nums;
+}
+
+// Moving off an untouched draft throws it away rather than leaving a key that
+// only Object.keys would ever see.
+function selectPara(n) {
+  if (selPara && selPara !== n && world.paragraphs[selPara] === "")
+    delete world.paragraphs[selPara];
+  selPara = n;
+  renderParaList();
+}
+
 function renderParaList() {
   const ul = $("listParas");
   if (!ul) return;
-  const nums = paraNumbers();
+  const nums = paraListNumbers();
   ul.innerHTML = "";
   if (!nums.length) {
     ul.innerHTML = '<li class="empty" style="cursor:default">No paragraphs yet.</li>';
@@ -2629,7 +2650,7 @@ function renderParaList() {
       li.querySelector(".id").textContent = n;
       li.querySelector(".nm").textContent = paraPreview(world.paragraphs[n]) || "(empty)";
       li.querySelector(".tag").textContent = users.length ? users.join(", ") : "unused";
-      li.addEventListener("click", () => { selPara = n; renderParaList(); });
+      li.addEventListener("click", () => selectPara(n));
       ul.appendChild(li);
     }
   }
@@ -2639,7 +2660,9 @@ function renderParaList() {
 function renderParaForm() {
   const box = $("formPara");
   if (!box) return;
-  if (!selPara || !world.paragraphs[selPara]) {
+  // Presence, not truthiness: a slot holding "" is a draft being written, and
+  // refusing to open the form on it is what made "+ Add" look like a no-op.
+  if (!selPara || world.paragraphs[selPara] === undefined) {
     box.innerHTML = '<p class="empty">Select a paragraph, or add a new one.</p>';
     return;
   }
@@ -2653,7 +2676,10 @@ function renderParaForm() {
     '<p class="hint">' + (users.length
       ? "Shown for: " + escapeHtml(users.join(", ")) + "."
       : "Nothing refers to this paragraph yet.") +
-    " Blank lines are kept as paragraph breaks." + (bookletMode()
+    " Blank lines are kept as paragraph breaks." +
+    '<span id="p-draft"' + (world.paragraphs[n] === "" ? "" : ' hidden') +
+    "> An empty paragraph is not saved — type something to keep slot " + n +
+    ".</span>" + (bookletMode()
       ? " Booklet mode is on, so the game cites this number instead of printing the text."
       : "") + "</p>" +
     '<div class="row">' +
@@ -2669,9 +2695,11 @@ function renderParaForm() {
     world.paragraphs[n] = ta.value.slice(0, LIM.PARA_LEN);
     counterFor($("c-p-text"), ta.value, LIM.PARA_LEN);
     renderWorldBar();
+    const draft = $("p-draft");
+    if (draft) draft.hidden = world.paragraphs[n] !== "";
     // Refresh only the preview text, so the textarea keeps focus
     const rows = $("listParas").querySelectorAll("li");
-    const idx = paraNumbers().indexOf(n);
+    const idx = paraListNumbers().indexOf(n);
     if (idx >= 0 && rows[idx] && rows[idx].querySelector(".nm"))
       rows[idx].querySelector(".nm").textContent = paraPreview(world.paragraphs[n]) || "(empty)";
   });
@@ -2683,7 +2711,7 @@ function renderParaForm() {
       $("p-num").value = n; return;
     }
     if (want === n) return;
-    if (world.paragraphs[want]) {
+    if (world.paragraphs[want] !== undefined) {
       toast("Paragraph " + want + " already exists.", true);
       $("p-num").value = n; return;
     }
@@ -2716,7 +2744,7 @@ function renderParaForm() {
 
 function addParagraph() {
   let n = 1;
-  while (n <= LIM.PARAGRAPHS && world.paragraphs[n]) n++;
+  while (n <= LIM.PARAGRAPHS && world.paragraphs[n] !== undefined) n++;
   if (n > LIM.PARAGRAPHS) { toast("All " + LIM.PARAGRAPHS + " paragraph slots are used.", true); return; }
   world.paragraphs[n] = "";
   selPara = n;
