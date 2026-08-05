@@ -57,6 +57,19 @@ const
   cmEvItemDel     = 709;
 
 type
+  { A modal TDialog ends itself on cmOk, cmCancel, cmYes and cmNo, and on
+    nothing else - see TDialog.HandleEvent in the fv package. Every list
+    dialog below reports its button through a command of its own, so on a
+    plain TDialog the button is drawn, is enabled (a command of 256 or more
+    is never disabled) and is pressable, yet does nothing at all: ExecView
+    never returns it and the handler behind it is unreachable. This ends the
+    modal state for those commands so the code that already tests for them
+    runs. }
+  PListDialog = ^TListDialog;
+  TListDialog = object(TDialog)
+    procedure HandleEvent(var Event: TEvent); virtual;
+  end;
+
   { Main application class }
   TEditorApp = object(TApplication)
     World: TGameWorld;
@@ -141,6 +154,59 @@ begin
     BoolToStr := 'Yes'
   else
     BoolToStr := 'No';
+end;
+
+{ TListDialog Implementation }
+
+procedure TListDialog.HandleEvent(var Event: TEvent);
+begin
+  inherited HandleEvent(Event);
+  if (Event.What = evCommand) and (State and sfModal <> 0) then
+    case Event.Command of
+      cmEditRoom, cmDeleteRoom,
+      cmEditObject, cmDeleteObject,
+      cmEditMob, cmDeleteMob,
+      cmEditPara, cmDeletePara,
+      cmAddEvent, cmEditEvent, cmDeleteEvent,
+      cmEvItemAdd, cmEvItemEdit, cmEvItemDel,
+      cmEvTrigger, cmEvConds, cmEvActs:
+        begin
+          EndModal(Event.Command);
+          ClearEvent(Event);
+        end;
+    end;
+end;
+
+{ TInputLine.GetData and TInputLine.SetData move a ShortString in and out of
+  the record handed to them: GetData zero-fills MaxLen+1 bytes at that address
+  and copies the field over the front, SetData copies MaxLen+1 bytes back the
+  other way. This unit compiles with long strings on, where a plain `string`
+  is an AnsiString - one pointer - so handing one to either call overwrites
+  the pointer and the stack behind it, then reads that rubbish back as a
+  string.
+  Every field in this editor went through those two calls, which is why none
+  of them could be typed into and why several OK buttons crashed. Both helpers
+  go through a real ShortString instead.
+
+  SetFieldStr truncates to the field's own MaxLen, not to 255. SetData copies
+  a fixed MaxLen+1 bytes into a buffer of exactly that size, so a longer value
+  would leave a length byte claiming more text than the buffer holds, and the
+  next Draw would read off the end of it. }
+function GetFieldStr(Field: PInputLine): string;
+var
+  S: ShortString;
+begin
+  S := '';
+  Field^.GetData(S);
+  GetFieldStr := S;
+end;
+
+procedure SetFieldStr(Field: PInputLine; const Value: string);
+var
+  S: ShortString;
+begin
+  S := Copy(Value, 1, Field^.MaxLen);
+  Field^.SetData(S);
 end;
 
 { TEditorApp Implementation }
@@ -331,7 +397,7 @@ begin
   if Control = cmOK then
   begin
     Filename := '';
-    InputField^.GetData(Filename);
+    Filename := GetFieldStr(InputField);
 
     if Filename <> '' then
     begin
@@ -392,7 +458,7 @@ begin
       DefaultFile := CurrentFile
     else
       DefaultFile := 'world.dat';
-    InputField^.SetData(DefaultFile);
+    SetFieldStr(InputField, DefaultFile);
     Insert(InputField);
 
     R.Assign(8, 5, 18, 7);
@@ -407,7 +473,7 @@ begin
   if Control = cmOK then
   begin
     Filename := '';
-    InputField^.GetData(Filename);
+    Filename := GetFieldStr(InputField);
 
     if Filename <> '' then
     begin
@@ -448,7 +514,7 @@ begin
       DefaultFile := ChangeFileExt(CurrentFile, '.bpl')
     else
       DefaultFile := 'world.bpl';
-    InputField^.SetData(DefaultFile);
+    SetFieldStr(InputField, DefaultFile);
     Insert(InputField);
 
     R.Assign(10, 5, 20, 7);
@@ -463,7 +529,7 @@ begin
   if Control = cmOK then
   begin
     Filename := '';
-    InputField^.GetData(Filename);
+    Filename := GetFieldStr(InputField);
 
     if Filename <> '' then
     begin
@@ -500,7 +566,7 @@ begin
       DefaultFile := ChangeFileExt(CurrentFile, '.txt')
     else
       DefaultFile := 'world.txt';
-    InputField^.SetData(DefaultFile);
+    SetFieldStr(InputField, DefaultFile);
     Insert(InputField);
 
     R.Assign(10, 5, 20, 7);
@@ -515,7 +581,7 @@ begin
   if Control = cmOK then
   begin
     Filename := '';
-    InputField^.GetData(Filename);
+    Filename := GetFieldStr(InputField);
 
     if Filename <> '' then
     begin
@@ -566,7 +632,7 @@ begin
 
   { Create dialog }
   R.Assign(10, 3, 70, 22);
-  Dialog := New(PDialog, Init(R, 'Room List'));
+  Dialog := New(PListDialog, Init(R, 'Room List'));
 
   with Dialog^ do
   begin
@@ -691,42 +757,42 @@ begin
     Insert(New(PStaticText, Init(R, 'North Exit:')));
     R.Assign(15, 7, 25, 8);
     NorthField := New(PInputLine, Init(R, 5));
-    NorthField^.SetData(ZeroStr);
+    SetFieldStr(NorthField, ZeroStr);
     Insert(NorthField);
 
     R.Assign(2, 9, 14, 10);
     Insert(New(PStaticText, Init(R, 'South Exit:')));
     R.Assign(15, 9, 25, 10);
     SouthField := New(PInputLine, Init(R, 5));
-    SouthField^.SetData(ZeroStr);
+    SetFieldStr(SouthField, ZeroStr);
     Insert(SouthField);
 
     R.Assign(2, 11, 14, 12);
     Insert(New(PStaticText, Init(R, 'East Exit:')));
     R.Assign(15, 11, 25, 12);
     EastField := New(PInputLine, Init(R, 5));
-    EastField^.SetData(ZeroStr);
+    SetFieldStr(EastField, ZeroStr);
     Insert(EastField);
 
     R.Assign(2, 13, 14, 14);
     Insert(New(PStaticText, Init(R, 'West Exit:')));
     R.Assign(15, 13, 25, 14);
     WestField := New(PInputLine, Init(R, 5));
-    WestField^.SetData(ZeroStr);
+    SetFieldStr(WestField, ZeroStr);
     Insert(WestField);
 
     R.Assign(2, 15, 14, 16);
     Insert(New(PStaticText, Init(R, 'Up Exit:')));
     R.Assign(15, 15, 25, 16);
     UpField := New(PInputLine, Init(R, 5));
-    UpField^.SetData(ZeroStr);
+    SetFieldStr(UpField, ZeroStr);
     Insert(UpField);
 
     R.Assign(2, 17, 14, 18);
     Insert(New(PStaticText, Init(R, 'Down Exit:')));
     R.Assign(15, 17, 25, 18);
     DownField := New(PInputLine, Init(R, 5));
-    DownField^.SetData(ZeroStr);
+    SetFieldStr(DownField, ZeroStr);
     Insert(DownField);
 
     { Score awarded on first visit }
@@ -734,7 +800,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Points:')));
     R.Assign(45, 7, 55, 8);
     PointsField := New(PInputLine, Init(R, 5));
-    PointsField^.SetData(ZeroStr);
+    SetFieldStr(PointsField, ZeroStr);
     Insert(PointsField);
 
     R.Assign(32, 9, 66, 10);
@@ -745,7 +811,7 @@ begin
     Insert(New(PStaticText, Init(R, 'First Visit:')));
     R.Assign(45, 11, 55, 12);
     FirstVisitField := New(PInputLine, Init(R, 5));
-    FirstVisitField^.SetData(ZeroStr);
+    SetFieldStr(FirstVisitField, ZeroStr);
     Insert(FirstVisitField);
 
     R.Assign(32, 13, 66, 14);
@@ -766,8 +832,8 @@ begin
     { Get data from fields }
     RoomName := '';
     RoomDesc := '';
-    NameField^.GetData(RoomName);
-    DescField^.GetData(RoomDesc);
+    RoomName := GetFieldStr(NameField);
+    RoomDesc := GetFieldStr(DescField);
 
     if RoomName = '' then
     begin
@@ -781,12 +847,12 @@ begin
 
     { Get exit data }
     NorthStr := ''; SouthStr := ''; EastStr := ''; WestStr := ''; UpStr := ''; DownStr := '';
-    NorthField^.GetData(NorthStr);
-    SouthField^.GetData(SouthStr);
-    EastField^.GetData(EastStr);
-    WestField^.GetData(WestStr);
-    UpField^.GetData(UpStr);
-    DownField^.GetData(DownStr);
+    NorthStr := GetFieldStr(NorthField);
+    SouthStr := GetFieldStr(SouthField);
+    EastStr := GetFieldStr(EastField);
+    WestStr := GetFieldStr(WestField);
+    UpStr := GetFieldStr(UpField);
+    DownStr := GetFieldStr(DownField);
 
     Room.Exits[dirNorth] := StrToIntDef(NorthStr, 0);
     Room.Exits[dirSouth] := StrToIntDef(SouthStr, 0);
@@ -796,11 +862,11 @@ begin
     Room.Exits[dirDown] := StrToIntDef(DownStr, 0);
 
     PointsStr := '';
-    PointsField^.GetData(PointsStr);
+    PointsStr := GetFieldStr(PointsField);
     Room.Points := StrToIntDef(PointsStr, 0);
 
     FirstVisitStr := '';
-    FirstVisitField^.GetData(FirstVisitStr);
+    FirstVisitStr := GetFieldStr(FirstVisitField);
     Room.FirstVisitPara := StrToIntDef(FirstVisitStr, 0);
 
     { Add room to world }
@@ -856,7 +922,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room Name:')));
     R.Assign(15, 2, 65, 3);
     NameField := New(PInputLine, Init(R, MAX_NAME_LEN));
-    NameField^.SetData(RoomName);
+    SetFieldStr(NameField, RoomName);
     Insert(NameField);
 
     { Description }
@@ -864,7 +930,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Description:')));
     R.Assign(15, 4, 65, 5);
     DescField := New(PInputLine, Init(R, MAX_DESC_LEN));
-    DescField^.SetData(RoomDesc);
+    SetFieldStr(DescField, RoomDesc);
     Insert(DescField);
 
     { Exits }
@@ -872,42 +938,42 @@ begin
     Insert(New(PStaticText, Init(R, 'North Exit:')));
     R.Assign(15, 7, 25, 8);
     NorthField := New(PInputLine, Init(R, 5));
-    NorthField^.SetData(NorthStr);
+    SetFieldStr(NorthField, NorthStr);
     Insert(NorthField);
 
     R.Assign(2, 9, 14, 10);
     Insert(New(PStaticText, Init(R, 'South Exit:')));
     R.Assign(15, 9, 25, 10);
     SouthField := New(PInputLine, Init(R, 5));
-    SouthField^.SetData(SouthStr);
+    SetFieldStr(SouthField, SouthStr);
     Insert(SouthField);
 
     R.Assign(2, 11, 14, 12);
     Insert(New(PStaticText, Init(R, 'East Exit:')));
     R.Assign(15, 11, 25, 12);
     EastField := New(PInputLine, Init(R, 5));
-    EastField^.SetData(EastStr);
+    SetFieldStr(EastField, EastStr);
     Insert(EastField);
 
     R.Assign(2, 13, 14, 14);
     Insert(New(PStaticText, Init(R, 'West Exit:')));
     R.Assign(15, 13, 25, 14);
     WestField := New(PInputLine, Init(R, 5));
-    WestField^.SetData(WestStr);
+    SetFieldStr(WestField, WestStr);
     Insert(WestField);
 
     R.Assign(2, 15, 14, 16);
     Insert(New(PStaticText, Init(R, 'Up Exit:')));
     R.Assign(15, 15, 25, 16);
     UpField := New(PInputLine, Init(R, 5));
-    UpField^.SetData(UpStr);
+    SetFieldStr(UpField, UpStr);
     Insert(UpField);
 
     R.Assign(2, 17, 14, 18);
     Insert(New(PStaticText, Init(R, 'Down Exit:')));
     R.Assign(15, 17, 25, 18);
     DownField := New(PInputLine, Init(R, 5));
-    DownField^.SetData(DownStr);
+    SetFieldStr(DownField, DownStr);
     Insert(DownField);
 
     { Score awarded on first visit }
@@ -915,7 +981,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Points:')));
     R.Assign(45, 7, 55, 8);
     PointsField := New(PInputLine, Init(R, 5));
-    PointsField^.SetData(PointsStr);
+    SetFieldStr(PointsField, PointsStr);
     Insert(PointsField);
 
     R.Assign(32, 9, 66, 10);
@@ -926,7 +992,7 @@ begin
     Insert(New(PStaticText, Init(R, 'First Visit:')));
     R.Assign(45, 11, 55, 12);
     FirstVisitField := New(PInputLine, Init(R, 5));
-    FirstVisitField^.SetData(FirstVisitStr);
+    SetFieldStr(FirstVisitField, FirstVisitStr);
     Insert(FirstVisitField);
 
     R.Assign(32, 13, 66, 14);
@@ -947,8 +1013,8 @@ begin
     { Get data from fields }
     RoomName := '';
     RoomDesc := '';
-    NameField^.GetData(RoomName);
-    DescField^.GetData(RoomDesc);
+    RoomName := GetFieldStr(NameField);
+    RoomDesc := GetFieldStr(DescField);
 
     if RoomName = '' then
     begin
@@ -962,12 +1028,12 @@ begin
 
     { Get exit data }
     NorthStr := ''; SouthStr := ''; EastStr := ''; WestStr := ''; UpStr := ''; DownStr := '';
-    NorthField^.GetData(NorthStr);
-    SouthField^.GetData(SouthStr);
-    EastField^.GetData(EastStr);
-    WestField^.GetData(WestStr);
-    UpField^.GetData(UpStr);
-    DownField^.GetData(DownStr);
+    NorthStr := GetFieldStr(NorthField);
+    SouthStr := GetFieldStr(SouthField);
+    EastStr := GetFieldStr(EastField);
+    WestStr := GetFieldStr(WestField);
+    UpStr := GetFieldStr(UpField);
+    DownStr := GetFieldStr(DownField);
 
     Room.Exits[dirNorth] := StrToIntDef(NorthStr, 0);
     Room.Exits[dirSouth] := StrToIntDef(SouthStr, 0);
@@ -977,11 +1043,11 @@ begin
     Room.Exits[dirDown] := StrToIntDef(DownStr, 0);
 
     PointsStr := '';
-    PointsField^.GetData(PointsStr);
+    PointsStr := GetFieldStr(PointsField);
     Room.Points := StrToIntDef(PointsStr, 0);
 
     FirstVisitStr := '';
-    FirstVisitField^.GetData(FirstVisitStr);
+    FirstVisitStr := GetFieldStr(FirstVisitField);
     Room.FirstVisitPara := StrToIntDef(FirstVisitStr, 0);
 
     { Update room in world }
@@ -1045,7 +1111,7 @@ begin
 
   { Create dialog }
   R.Assign(10, 3, 70, 22);
-  Dialog := New(PDialog, Init(R, 'Object List'));
+  Dialog := New(PListDialog, Init(R, 'Object List'));
 
   with Dialog^ do
   begin
@@ -1169,7 +1235,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData(ZeroStr);
+    SetFieldStr(RoomIDField, ZeroStr);
     Insert(RoomIDField);
 
     { Flags }
@@ -1197,7 +1263,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Points:')));
     R.Assign(37, 8, 47, 9);
     PointsField := New(PInputLine, Init(R, 5));
-    PointsField^.SetData(ZeroStr);
+    SetFieldStr(PointsField, ZeroStr);
     Insert(PointsField);
 
     R.Assign(26, 10, 56, 11);
@@ -1208,7 +1274,7 @@ begin
     Insert(New(PStaticText, Init(R, 'First Take:')));
     R.Assign(37, 12, 47, 13);
     FirstTakeField := New(PInputLine, Init(R, 5));
-    FirstTakeField^.SetData(ZeroStr);
+    SetFieldStr(FirstTakeField, ZeroStr);
     Insert(FirstTakeField);
 
     R.Assign(26, 13, 56, 14);
@@ -1232,10 +1298,10 @@ begin
     RoomIDStr := '';
     UseTextStr := '';
 
-    NameField^.GetData(ObjName);
-    DescField^.GetData(ObjDesc);
-    RoomIDField^.GetData(RoomIDStr);
-    UseTextField^.GetData(UseTextStr);
+    ObjName := GetFieldStr(NameField);
+    ObjDesc := GetFieldStr(DescField);
+    RoomIDStr := GetFieldStr(RoomIDField);
+    UseTextStr := GetFieldStr(UseTextField);
 
     if ObjName = '' then
     begin
@@ -1260,11 +1326,11 @@ begin
     if (PickupVal and $08) <> 0 then Include(Obj.Flags, ofRead);
 
     PointsStr := '';
-    PointsField^.GetData(PointsStr);
+    PointsStr := GetFieldStr(PointsField);
     Obj.Points := StrToIntDef(PointsStr, 0);
 
     FirstTakeStr := '';
-    FirstTakeField^.GetData(FirstTakeStr);
+    FirstTakeStr := GetFieldStr(FirstTakeField);
     Obj.FirstTakePara := StrToIntDef(FirstTakeStr, 0);
 
     { Add to world }
@@ -1315,7 +1381,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Name:')));
     R.Assign(13, 2, 55, 3);
     NameField := New(PInputLine, Init(R, MAX_OBJ_NAME));
-    NameField^.SetData(ObjName);
+    SetFieldStr(NameField, ObjName);
     Insert(NameField);
 
     { Description }
@@ -1323,7 +1389,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Description:')));
     R.Assign(13, 4, 55, 5);
     DescField := New(PInputLine, Init(R, MAX_OBJ_DESC));
-    DescField^.SetData(ObjDesc);
+    SetFieldStr(DescField, ObjDesc);
     Insert(DescField);
 
     { Room ID }
@@ -1331,7 +1397,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData(RoomIDStr);
+    SetFieldStr(RoomIDField, RoomIDStr);
     Insert(RoomIDField);
 
     { Flags }
@@ -1361,7 +1427,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Use Text:')));
     R.Assign(13, 13, 55, 14);
     UseTextField := New(PInputLine, Init(R, MAX_OBJ_DESC));
-    UseTextField^.SetData(UseTextStr);
+    SetFieldStr(UseTextField, UseTextStr);
     Insert(UseTextField);
 
     { Score awarded on first take }
@@ -1369,7 +1435,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Points:')));
     R.Assign(37, 8, 47, 9);
     PointsField := New(PInputLine, Init(R, 5));
-    PointsField^.SetData(PointsStr);
+    SetFieldStr(PointsField, PointsStr);
     Insert(PointsField);
 
     R.Assign(26, 10, 56, 11);
@@ -1380,7 +1446,7 @@ begin
     Insert(New(PStaticText, Init(R, 'First Take:')));
     R.Assign(37, 12, 47, 13);
     FirstTakeField := New(PInputLine, Init(R, 5));
-    FirstTakeField^.SetData(FirstTakeStr);
+    SetFieldStr(FirstTakeField, FirstTakeStr);
     Insert(FirstTakeField);
 
     R.Assign(26, 13, 56, 14);
@@ -1404,10 +1470,10 @@ begin
     RoomIDStr := '';
     UseTextStr := '';
 
-    NameField^.GetData(ObjName);
-    DescField^.GetData(ObjDesc);
-    RoomIDField^.GetData(RoomIDStr);
-    UseTextField^.GetData(UseTextStr);
+    ObjName := GetFieldStr(NameField);
+    ObjDesc := GetFieldStr(DescField);
+    RoomIDStr := GetFieldStr(RoomIDField);
+    UseTextStr := GetFieldStr(UseTextField);
 
     if ObjName = '' then
     begin
@@ -1432,11 +1498,11 @@ begin
     if (FlagVal and $08) <> 0 then Include(Obj.Flags, ofRead);
 
     PointsStr := '';
-    PointsField^.GetData(PointsStr);
+    PointsStr := GetFieldStr(PointsField);
     Obj.Points := StrToIntDef(PointsStr, 0);
 
     FirstTakeStr := '';
-    FirstTakeField^.GetData(FirstTakeStr);
+    FirstTakeStr := GetFieldStr(FirstTakeField);
     Obj.FirstTakePara := StrToIntDef(FirstTakeStr, 0);
 
     { Update in world }
@@ -1491,7 +1557,7 @@ begin
 
   { Create dialog }
   R.Assign(10, 3, 70, 22);
-  Dialog := New(PDialog, Init(R, 'Mob List'));
+  Dialog := New(PListDialog, Init(R, 'Mob List'));
 
   with Dialog^ do
   begin
@@ -1613,7 +1679,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData(ZeroStr);
+    SetFieldStr(RoomIDField, ZeroStr);
     Insert(RoomIDField);
 
     { Dialogue }
@@ -1628,7 +1694,7 @@ begin
     Insert(New(PStaticText, Init(R, 'First Talk:')));
     R.Assign(14, 10, 24, 11);
     FirstTalkField := New(PInputLine, Init(R, 5));
-    FirstTalkField^.SetData(ZeroStr);
+    SetFieldStr(FirstTalkField, ZeroStr);
     Insert(FirstTalkField);
 
     R.Assign(26, 10, 56, 11);
@@ -1653,11 +1719,11 @@ begin
     DialogueStr := '';
     FirstTalkStr := '';
 
-    NameField^.GetData(MobName);
-    DescField^.GetData(MobDesc);
-    RoomIDField^.GetData(RoomIDStr);
-    DialogueField^.GetData(DialogueStr);
-    FirstTalkField^.GetData(FirstTalkStr);
+    MobName := GetFieldStr(NameField);
+    MobDesc := GetFieldStr(DescField);
+    RoomIDStr := GetFieldStr(RoomIDField);
+    DialogueStr := GetFieldStr(DialogueField);
+    FirstTalkStr := GetFieldStr(FirstTalkField);
 
     if MobName = '' then
     begin
@@ -1717,7 +1783,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Name:')));
     R.Assign(13, 2, 55, 3);
     NameField := New(PInputLine, Init(R, MAX_OBJ_NAME));
-    NameField^.SetData(MobName);
+    SetFieldStr(NameField, MobName);
     Insert(NameField);
 
     { Description }
@@ -1725,7 +1791,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Description:')));
     R.Assign(13, 4, 55, 5);
     DescField := New(PInputLine, Init(R, MAX_OBJ_DESC));
-    DescField^.SetData(MobDesc);
+    SetFieldStr(DescField, MobDesc);
     Insert(DescField);
 
     { Room ID }
@@ -1733,7 +1799,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Room ID:')));
     R.Assign(13, 6, 23, 7);
     RoomIDField := New(PInputLine, Init(R, 5));
-    RoomIDField^.SetData(RoomIDStr);
+    SetFieldStr(RoomIDField, RoomIDStr);
     Insert(RoomIDField);
 
     { Dialogue }
@@ -1741,7 +1807,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Dialogue:')));
     R.Assign(13, 8, 55, 9);
     DialogueField := New(PInputLine, Init(R, MAX_DIALOGUE));
-    DialogueField^.SetData(DialogueStr);
+    SetFieldStr(DialogueField, DialogueStr);
     Insert(DialogueField);
 
     { Story paragraph played the first time the player talks to this mob }
@@ -1749,7 +1815,7 @@ begin
     Insert(New(PStaticText, Init(R, 'First Talk:')));
     R.Assign(14, 10, 24, 11);
     FirstTalkField := New(PInputLine, Init(R, 5));
-    FirstTalkField^.SetData(FirstTalkStr);
+    SetFieldStr(FirstTalkField, FirstTalkStr);
     Insert(FirstTalkField);
 
     R.Assign(26, 10, 56, 11);
@@ -1774,11 +1840,11 @@ begin
     DialogueStr := '';
     FirstTalkStr := '';
 
-    NameField^.GetData(MobName);
-    DescField^.GetData(MobDesc);
-    RoomIDField^.GetData(RoomIDStr);
-    DialogueField^.GetData(DialogueStr);
-    FirstTalkField^.GetData(FirstTalkStr);
+    MobName := GetFieldStr(NameField);
+    MobDesc := GetFieldStr(DescField);
+    RoomIDStr := GetFieldStr(RoomIDField);
+    DialogueStr := GetFieldStr(DialogueField);
+    FirstTalkStr := GetFieldStr(FirstTalkField);
 
     if MobName = '' then
     begin
@@ -1944,7 +2010,7 @@ begin
 
     R.Assign(3, 3, 13, 4);
     NumField := New(PInputLine, Init(R, 5));
-    NumField^.SetData(NumStr);
+    SetFieldStr(NumField, NumStr);
     Insert(NumField);
 
     R.Assign(3, 4, 37, 5);
@@ -1962,7 +2028,7 @@ begin
   if Control = cmOK then
   begin
     NumStr := '';
-    NumField^.GetData(NumStr);
+    NumStr := GetFieldStr(NumField);
     Num := StrToIntDef(NumStr, 0);
     if (Num >= 1) and (Num <= MAX_PARAGRAPHS) then
     begin
@@ -2009,7 +2075,7 @@ begin
   end;
 
   R.Assign(6, 3, 74, 22);
-  Dialog := New(PDialog, Init(R, 'Story Paragraphs'));
+  Dialog := New(PListDialog, Init(R, 'Story Paragraphs'));
 
   with Dialog^ do
   begin
@@ -2077,7 +2143,7 @@ begin
     R.Assign(3, 3, 47, 4);
     InputField := New(PInputLine, Init(R, 255));
     DefaultFile := 'ORBXREF.TXT';
-    InputField^.SetData(DefaultFile);
+    SetFieldStr(InputField, DefaultFile);
     Insert(InputField);
 
     R.Assign(10, 5, 20, 7);
@@ -2092,7 +2158,7 @@ begin
   if Control = cmOK then
   begin
     Filename := '';
-    InputField^.GetData(Filename);
+    Filename := GetFieldStr(InputField);
     if Filename <> '' then
     begin
       if WriteParaXRef(Filename, World) then
@@ -2127,7 +2193,7 @@ begin
     R.Assign(3, 3, 47, 4);
     InputField := New(PInputLine, Init(R, 255));
     DefaultFile := 'ORBLORE.TXT';
-    InputField^.SetData(DefaultFile);
+    SetFieldStr(InputField, DefaultFile);
     Insert(InputField);
 
     R.Assign(10, 5, 20, 7);
@@ -2142,7 +2208,7 @@ begin
   if Control = cmOK then
   begin
     Filename := '';
-    InputField^.GetData(Filename);
+    Filename := GetFieldStr(InputField);
 
     if Filename <> '' then
     begin
@@ -2455,7 +2521,7 @@ begin
       R.Assign(23, Y, 33, Y + 1);
       Field1 := New(PInputLine, Init(R, 6));
       S := IntToStr(C.TargetID);
-      Field1^.SetData(S);
+      SetFieldStr(Field1, S);
       Insert(Field1);
       Inc(Y, 2);
     end;
@@ -2467,7 +2533,7 @@ begin
       R.Assign(23, Y, 33, Y + 1);
       Field2 := New(PInputLine, Init(R, 6));
       S := IntToStr(C.Value);
-      Field2^.SetData(S);
+      SetFieldStr(Field2, S);
       Insert(Field2);
       Inc(Y, 2);
     end;
@@ -2491,7 +2557,7 @@ begin
     if Field1 <> nil then
     begin
       S := '';
-      Field1^.GetData(S);
+      S := GetFieldStr(Field1);
       C.TargetID := StrToIntDef(S, 0);
     end
     else
@@ -2500,7 +2566,7 @@ begin
     if Field2 <> nil then
     begin
       S := '';
-      Field2^.GetData(S);
+      S := GetFieldStr(Field2);
       C.Value := StrToIntDef(S, 0);
     end
     else
@@ -2567,7 +2633,7 @@ begin
       R.Assign(25, Y, 35, Y + 1);
       Field1 := New(PInputLine, Init(R, 6));
       S := IntToStr(A.TargetID);
-      Field1^.SetData(S);
+      SetFieldStr(Field1, S);
       Insert(Field1);
       Inc(Y, 2);
     end;
@@ -2597,7 +2663,7 @@ begin
         R.Assign(25, Y, 35, Y + 1);
         Field2 := New(PInputLine, Init(R, 6));
         S := IntToStr(Dest);
-        Field2^.SetData(S);
+        SetFieldStr(Field2, S);
         Insert(Field2);
         Inc(Y, 2);
       end;
@@ -2609,7 +2675,7 @@ begin
       R.Assign(25, Y, 35, Y + 1);
       Field2 := New(PInputLine, Init(R, 6));
       S := IntToStr(A.Value);
-      Field2^.SetData(S);
+      SetFieldStr(Field2, S);
       Insert(Field2);
       Inc(Y, 2);
     end;
@@ -2622,7 +2688,7 @@ begin
       R.Assign(2, Y, 58, Y + 1);
       TextField := New(PInputLine, Init(R, MAX_EVENT_TEXT));
       S := A.Text;
-      TextField^.SetData(S);
+      SetFieldStr(TextField, S);
       Insert(TextField);
       Inc(Y, 2);
       R.Assign(2, Y, 58, Y + 1);
@@ -2642,7 +2708,7 @@ begin
     if Field1 <> nil then
     begin
       S := '';
-      Field1^.GetData(S);
+      S := GetFieldStr(Field1);
       A.TargetID := StrToIntDef(S, 0);
     end
     else
@@ -2656,7 +2722,7 @@ begin
       if Field2 <> nil then
       begin
         S := '';
-        Field2^.GetData(S);
+        S := GetFieldStr(Field2);
         Dest := StrToIntDef(S, 0);
       end;
       A.Value := EncodeExitValue(TDirection(Flags), Dest);
@@ -2664,7 +2730,7 @@ begin
     else if Field2 <> nil then
     begin
       S := '';
-      Field2^.GetData(S);
+      S := GetFieldStr(Field2);
       A.Value := StrToIntDef(S, 0);
     end
     else
@@ -2673,7 +2739,7 @@ begin
     if TextField <> nil then
     begin
       S := '';
-      TextField^.GetData(S);
+      S := GetFieldStr(TextField);
       A.Text := S;
     end
     else
@@ -2728,7 +2794,7 @@ begin
       Items^.Insert(NewStr('(none yet - press Add)'));
 
     R.Assign(8, 4, 72, 20);
-    Dialog := New(PDialog, Init(R, Title));
+    Dialog := New(PListDialog, Init(R, Title));
     with Dialog^ do
     begin
       R.Assign(60, 2, 61, 11);
@@ -2837,7 +2903,7 @@ begin
     Finished := True;
 
     R.Assign(6, 3, 74, 22);
-    Dialog := New(PDialog, Init(R, 'Event ' + IntToStr(Slot)));
+    Dialog := New(PListDialog, Init(R, 'Event ' + IntToStr(Slot)));
     ID1Field := nil;
     ID2Field := nil;
 
@@ -2848,7 +2914,7 @@ begin
       R.Assign(13, 2, 64, 3);
       NameField := New(PInputLine, Init(R, MAX_EVENT_NAME));
       S := E.Name;
-      NameField^.SetData(S);
+      SetFieldStr(NameField, S);
       Insert(NameField);
 
       R.Assign(2, 4, 12, 5);
@@ -2862,7 +2928,7 @@ begin
       R.Assign(24, 6, 34, 7);
       ID1Field := New(PInputLine, Init(R, 6));
       S := IntToStr(E.TriggerID);
-      ID1Field^.SetData(S);
+      SetFieldStr(ID1Field, S);
       Insert(ID1Field);
 
       if TriggerLabel2(E.TriggerType) <> '' then
@@ -2872,7 +2938,7 @@ begin
         R.Assign(24, 8, 34, 9);
         ID2Field := New(PInputLine, Init(R, 6));
         S := IntToStr(E.TriggerID2);
-        ID2Field^.SetData(S);
+        SetFieldStr(ID2Field, S);
         Insert(ID2Field);
       end
       else
@@ -2917,15 +2983,15 @@ begin
     if Control <> cmCancel then
     begin
       S := '';
-      NameField^.GetData(S);
+      S := GetFieldStr(NameField);
       E.Name := S;
       S := '';
-      ID1Field^.GetData(S);
+      S := GetFieldStr(ID1Field);
       E.TriggerID := StrToIntDef(S, 0);
       if ID2Field <> nil then
       begin
         S := '';
-        ID2Field^.GetData(S);
+        S := GetFieldStr(ID2Field);
         E.TriggerID2 := StrToIntDef(S, 0);
       end
       else
@@ -3032,7 +3098,7 @@ begin
   end;
 
   R.Assign(4, 3, 76, 22);
-  Dialog := New(PDialog, Init(R, 'Events'));
+  Dialog := New(PListDialog, Init(R, 'Events'));
 
   with Dialog^ do
   begin
@@ -3121,7 +3187,7 @@ begin
     Insert(New(PStaticText, Init(R, 'World Title:')));
     R.Assign(16, 2, 45, 3);
     TitleField := New(PInputLine, Init(R, MAX_NAME_LEN));
-    TitleField^.SetData(TitleStr);
+    SetFieldStr(TitleField, TitleStr);
     Insert(TitleField);
 
     { Start Room }
@@ -3129,7 +3195,7 @@ begin
     Insert(New(PStaticText, Init(R, 'Start Room ID:')));
     R.Assign(16, 4, 26, 5);
     StartRoomField := New(PInputLine, Init(R, 5));
-    StartRoomField^.SetData(StartRoomStr);
+    SetFieldStr(StartRoomField, StartRoomStr);
     Insert(StartRoomField);
 
     { Win condition }
@@ -3137,14 +3203,14 @@ begin
     Insert(New(PStaticText, Init(R, 'Win Room ID:')));
     R.Assign(16, 6, 26, 7);
     WinRoomField := New(PInputLine, Init(R, 5));
-    WinRoomField^.SetData(WinRoomStr);
+    SetFieldStr(WinRoomField, WinRoomStr);
     Insert(WinRoomField);
 
     R.Assign(2, 8, 15, 9);
     Insert(New(PStaticText, Init(R, 'Win Object ID:')));
     R.Assign(16, 8, 26, 9);
     WinObjField := New(PInputLine, Init(R, 5));
-    WinObjField^.SetData(WinObjStr);
+    SetFieldStr(WinObjField, WinObjStr);
     Insert(WinObjField);
 
     R.Assign(2, 10, 56, 11);
@@ -3156,21 +3222,21 @@ begin
     Insert(New(PStaticText, Init(R, 'Intro Para:')));
     R.Assign(16, 12, 26, 13);
     IntroField := New(PInputLine, Init(R, 5));
-    IntroField^.SetData(IntroStr);
+    SetFieldStr(IntroField, IntroStr);
     Insert(IntroField);
 
     R.Assign(30, 12, 43, 13);
     Insert(New(PStaticText, Init(R, 'Win Para:')));
     R.Assign(44, 12, 54, 13);
     WinParaField := New(PInputLine, Init(R, 5));
-    WinParaField^.SetData(WinParaStr);
+    SetFieldStr(WinParaField, WinParaStr);
     Insert(WinParaField);
 
     R.Assign(2, 14, 15, 15);
     Insert(New(PStaticText, Init(R, 'Lose Para:')));
     R.Assign(16, 14, 26, 15);
     LoseParaField := New(PInputLine, Init(R, 5));
-    LoseParaField^.SetData(LoseParaStr);
+    SetFieldStr(LoseParaField, LoseParaStr);
     Insert(LoseParaField);
 
     R.Assign(30, 14, 56, 15);
@@ -3210,13 +3276,13 @@ begin
     WinRoomStr := '';
     WinObjStr := '';
 
-    TitleField^.GetData(TitleStr);
-    StartRoomField^.GetData(StartRoomStr);
-    WinRoomField^.GetData(WinRoomStr);
-    WinObjField^.GetData(WinObjStr);
-    IntroField^.GetData(IntroStr);
-    WinParaField^.GetData(WinParaStr);
-    LoseParaField^.GetData(LoseParaStr);
+    TitleStr := GetFieldStr(TitleField);
+    StartRoomStr := GetFieldStr(StartRoomField);
+    WinRoomStr := GetFieldStr(WinRoomField);
+    WinObjStr := GetFieldStr(WinObjField);
+    IntroStr := GetFieldStr(IntroField);
+    WinParaStr := GetFieldStr(WinParaField);
+    LoseParaStr := GetFieldStr(LoseParaField);
     BookletCheck^.GetData(BookletVal);
 
     { An empty title only rejects the title - it used to discard the start

@@ -292,6 +292,19 @@ never reused or shifted** — deleting paragraph 7 blanks slot 7 rather than com
 because those numbers get printed in a booklet and must not move under the player.
 `SetParagraph` in gamedata.pas enforces this; `ParaCount` tracks the highest used slot.
 
+**An empty paragraph is not a paragraph.** `SetParagraph` clears the slot and
+rewinds `ParaCount` when handed `''`, and `setParagraph` in `web/editor.html`
+deletes the key — so an empty slot is never written to any of the three formats.
+That rule collides with an editor's need to *create* one before there is
+anything to put in it: the browser editor's **+ Add** stores `""`, and every
+display path there filtered slots by truthiness, so a newly added paragraph was
+invisible in the list and the form refused to open on it — the button looked
+dead. `paraNumbers()` remains the persistence truth; `paraListNumbers()` is the
+Story tab's view of it, adding the one empty slot that is currently selected,
+and `selectPara` drops an untouched draft when the author moves off it. The two
+Pascal editors avoid the problem by asking for the number first and opening
+their editing form straight onto the empty slot.
+
 `TParagraphArray` is explicitly `AnsiString` (`TParaText`), not `string`. These units
 compile with short strings on, where a plain `string` is a 256-byte `ShortString` —
 too short for a paragraph, and an array of 128 of them would be 32KB of static data
@@ -663,6 +676,34 @@ The Turbo Vision editor (`editor-tv`) uses Free Pascal's Vision units and provid
   asking only for the fields it uses. `PickIndex` is the one picker all three
   enums share. Note that its parameter is `Preselect`, not `Current`:
   `TGroup` has a field of that name and it wins inside a `with Dialog^` block
+
+Two things about Free Vision are load-bearing here, and both fail silently
+rather than loudly:
+
+- **A modal `TDialog` ends itself on `cmOk`, `cmCancel`, `cmYes` and `cmNo`,
+  and on nothing else.** Every list dialog reports its button through a command
+  of its own — Edit, Delete, Add, and the event editor's *Trigger…*,
+  *Conditions…*, *Actions…* — so on a plain `TDialog` those buttons are drawn,
+  are enabled (a command of 256 or more is never disabled) and are pressable,
+  yet `ExecView` never returns them and the handler behind each one is dead
+  code. `TListDialog` is the one-method descendant that calls `EndModal` for
+  them; the seven list dialogs construct `PListDialog`, not `PDialog`.
+- **`TInputLine.GetData`/`SetData` exchange a `ShortString`, and this unit is
+  `{$H+}`.** `GetData` zero-fills `MaxLen+1` bytes at the address it is handed
+  and copies the field over the front; passing a `string` therefore hands it an
+  AnsiString *pointer* to overwrite, along with the stack behind it, and reads
+  the wreckage back as a string. Nothing goes through those calls directly:
+  `GetFieldStr` and `SetFieldStr` own a real `ShortString` buffer. `SetFieldStr`
+  truncates to that field's own `MaxLen` rather than to 255, because `SetData`
+  copies a fixed `MaxLen+1` bytes into a buffer of exactly that size — a longer
+  value leaves a length byte claiming more text than the buffer holds, and the
+  next `Draw` runs off the end of it. The cluster (`TCheckBoxes`) and `PMemo`
+  calls exchange a `Word` and a record respectively and are correct as they are.
+
+The Turbo Vision editor has no automated test — it is excluded from CI, and
+FPC's video layer writes to a terminal, so driving it means a pty that answers
+the terminal probe. Both defects above survived that long because a dead button
+and a corrupted field look like nothing happening.
 
 The lightweight `editor.pas` edits a paragraph as a `MAX_PARA_LINES` × 74 grid of
 `ReadLine` calls joined with `#13#10`, because it has no multi-line control. All
